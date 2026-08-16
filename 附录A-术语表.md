@@ -85,3 +85,35 @@
 - **`!!js`**：cordis.yml 中的 JS 表达式标记，加载时求值。
 - **`__DSH_BOOT__`**：Web 页面里的启动清单（客户端插件入口图）。
 - **`~/.dsh`**：默认 Harness home。
+
+## 主题索引（按需求查找）
+
+按"想解决什么问题"查术语（→ 指向术语表词条；括号内是全书章节）：
+
+**插件开发**
+- 想写一个插件 → Plugin / Context / inject / Effect / cordis.yml（第 3 章）
+- 想给模型加能力 → Tool / defineTool / Seam / Consumer（第 8 章 + 附录 D）
+- 想换实现 → Seam / Provider / Bundle（第 8 章）
+- 想加配置层 → Profile / Patch / insert / settings.yaml（第 4 章）
+
+**架构理解**
+- 想理解加载顺序 → Bundle / Profile / Patch / !!js / cordis.yml（第 4 章）
+- 想理解通信 → emit / waterfall / parallel / serial / 事件域 / Scope（第 5 章）
+- 想理解会话 → Session / SessionEvent / Event Sourcing / deriveMessages / compaction / spill（第 6 章）
+- 想理解主循环 → Turn / Step / inbox / AgentHandle / agent-loop（第 7 章）
+- 想理解安全 → Sandbox / Landlock / Seatbelt / ACL / fail-closed / permission-presets / BOOTSTRAP_NAMES（第 10 章）
+- 想理解前端 → __DSH_BOOT__ / webServer / connection / trustedHosts / HMR（第 11 章）
+- 想理解 RPC → Typert / Remote / RemoteScope / TypertLookupMap / SRC fallback（第 12 章）
+
+**运维与调试**
+- 报错排查 → fail-loud / MISSING_CREDENTIAL / credentialRef / --dump-config（附录 G）
+- 测试 → keyless snapshot / hygiene / knip / publint（第 14 章）
+- 性能 → compaction / spill / session-projection-cache（附录 F）
+
+**进阶能力**
+- 委派 → subagents / subagent-spawn-in-process / maxDepth（第 13 章）
+- 技能 → skills / tool-skill（第 13 章）
+- 编排 → workflowEngine / tool-workflow / tool-ralph（第 13 章）
+- 后台 → jobs / tool-jobs（第 13 章）
+- 多入口 → ACP / JSON-RPC / Python SDK / Hooks（第 13 章）
+
