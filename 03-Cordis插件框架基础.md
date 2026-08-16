@@ -105,6 +105,27 @@ export function apply(ctx: Context) {
 
 好处是**面向接口编程**：工具插件只依赖 `ctx.tools` 这个抽象，不关心它背后是本地实现还是远程沙箱实现（第 8 章会看到这个抽象的力量）。
 
+把"加载 → 依赖注入 → 激活 → 卸载回滚"的完整生命周期画出来，注意最后一步——**可逆副作用**让系统回到干净状态：
+
+```mermaid
+sequenceDiagram
+    participant L as cordis-plugin-loader
+    participant C as Context
+    participant P as 插件（apply）
+    participant S as 服务注册表（ctx.tools...）
+    L->>L: 读 cordis.yml 条目列表
+    L->>C: 实例化插件
+    L->>C: 解析 inject 依赖（框架推导顺序）
+    C-->>L: 依赖就绪
+    L->>P: 执行 apply(ctx)
+    P->>S: 注册服务/监听器/工具（effect）
+    S-->>P: 返回销毁函数
+    Note over P,S: 运行期：服务可用
+    L-->>P: 插件被卸载
+    P->>S: 调用销毁函数（自动回滚）
+    S-->>C: 系统回到干净状态
+```
+
 ## 3.6 事件的四种模式：通信的四种语义
 
 | 模式 | 是否等待 | 顺序 | 返回值 | 用途 |
