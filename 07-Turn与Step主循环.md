@@ -30,21 +30,33 @@ DSH 的官方术语（`docs/architecture.md`）：
 
 ## 7.3 完整时序：一次 turn 的内部
 
-```text
-turn/start
-  认领下一步输入 + 一条排队消息
-  组装 prompt 分节 + 工具 schema
-  -> agent/pre-step              可以拒绝或改写输入
-     step/start
-     把输入追加为用户消息
-     从日志推导模型历史
-     agent/request -> llm/stream -> assistant/chunk* -> assistant/message
-     tool/call* -> tools/pre-execute -> tools/execute -> tools/post-execute
-                   -> tool/result*
-     step/end
-     还有事要做，或新输入到达 -> 认领 -> 下一步
-  -> agent/turn-stopping
-turn/end
+```mermaid
+sequenceDiagram
+    participant H as 主循环（agent-loop）
+    participant P as 插件闸门
+    participant M as 模型
+    participant T as 工具管线
+    participant S as 会话日志
+    H->>S: turn/start
+    H->>H: 认领输入 + 组装 prompt/schema
+    H->>P: agent/pre-step（waterfall：可改写/拒绝）
+    P-->>H: 放行后的输入
+    H->>S: step/start + user/message
+    H->>M: agent/request → llm/stream
+    M-->>H: assistant/chunk* → assistant/message
+    loop 模型请求的工具调用
+        H->>T: tool/call（tools/pre-execute）
+        T->>T: tools/execute（可并行、带超时/取消）
+        T-->>H: tool/result（tools/post-execute）
+        H->>S: tool/result
+    end
+    H->>S: step/end
+    alt 还有事要做 / 新输入到达
+        H->>H: 认领 → 下一步（next-step）
+    else 没有欠账
+        H->>P: agent/turn-stopping（serial：任一可终止）
+        H->>S: turn/end
+    end
 ```
 
 ### 三个"闸门"：为什么是 waterfall？

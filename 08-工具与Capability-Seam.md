@@ -70,6 +70,26 @@ ctx.tools.register(defineTool({
 | 远程 Provider（E2B 沙箱 POC） | `dsh-e2b` 里的 fs adapter |
 | 消费者（工具） | `dsh-tool-fs` |
 
+接缝三角的结构——Consumer 只依赖定义，不依赖实现；换 Provider 就是换整个执行世界：
+
+```mermaid
+flowchart LR
+    subgraph Consumer[消费者]
+        C[模型工具<br/>tool-fs / tool-bash]
+    end
+    subgraph Definition[服务定义]
+        D[ctx.fs / ctx.shell<br/>稳定接口]
+    end
+    subgraph Providers[服务提供者]
+        P1[本地实现<br/>dsh-fs-local]
+        P2[远程沙箱实现<br/>dsh-e2b adapter]
+    end
+    C -->|调用接口| D
+    D -->|实现 1| P1
+    D -->|实现 2| P2
+    style D fill:#e3f2fd
+```
+
 ### 设计思考：接缝 = 依赖倒置的极致
 
 "面向接口编程"大家都会说，但接缝把它做到了极端：**换 Provider 换整个产品**。本地 fs + 本地 bash + 本地 PTY + 本地 LSP 共享一个执行世界；把它们都指到 E2B 沙箱，就变成"全部在远程沙箱里跑"——而工具代码一行不改。

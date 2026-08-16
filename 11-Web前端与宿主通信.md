@@ -12,16 +12,24 @@
 
 DSH 的 Web 形态是典型的"浏览器前端 + Node 宿主"两层：
 
-```text
-浏览器（Web UI）
-  │  HTTP /api（RPC）         WebSocket（事件下行）
-  ▼
-Node 宿主（dsh 进程）
-  ├─ webServer       node:http 载体
-  ├─ connection      /api 桥 + WS downlink + 信任围栏
-  ├─ modules         客户端插件清单与 bundle 服务
-  ├─ api-gateway     Typert RPC 网关
-  └─ 业务插件树       会话/工具/模型/沙箱……
+```mermaid
+flowchart TB
+    subgraph Browser[浏览器（Web UI）]
+        UI[客户端插件集合<br/>按 __DSH_BOOT__ 清单加载]
+    end
+    subgraph Host[Node 宿主（dsh 进程）]
+        WS[webServer<br/>node:http 极简载体]
+        CONN[connection<br/>/api 桥 + WS downlink + 信任围栏]
+        MOD[modules<br/>客户端插件清单与 bundle 服务]
+        GW[api-gateway<br/>Typert RPC 网关]
+        BIZ[业务插件树<br/>会话/工具/模型/沙箱…]
+    end
+    UI <-->|"HTTP /api（RPC：你问我答）"| CONN
+    WS <-->|"WebSocket（事件下行：宿主主动推）"| UI
+    CONN --> WS
+    MOD --> WS
+    GW --> CONN
+    BIZ --> GW
 ```
 
 注意两条通道的分工：**HTTP /api 做"请求-响应"（RPC），WebSocket 做"事件下行"（推）**。为什么是两条而不是一条？因为这两类交互的语义不同：RPC 是"你问我答"（创建目标、获取列表），事件下行是"宿主主动通知"（新的 assistant/chunk 到了、工具结果好了）。把"问答"和"推送"分开，是通信架构的基本功。

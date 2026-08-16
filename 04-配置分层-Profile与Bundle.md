@@ -4,13 +4,19 @@
 
 ## 4.1 一句话模型：运行中的 DSH = 有序分层合成的插件树
 
-一个正在运行的 DSH 不是"一个配置文件"，而是一棵由多层叠加合成的插件树：
+一个正在运行的 DSH 不是"一个配置文件"，而是一棵由多层叠加合成的插件树。后加的层覆盖先加的层：
 
-```text
-bundle1（如 dsh-base）——底座：模型、工具、持久化、沙箱、审批
-  + bundle2（如 dsh-web-app）——上层：浏览器应用
-    + 本机用户的 cordis.patch.yml——用户层补丁
-      + 命令行 --patch 覆盖——临时层
+```mermaid
+flowchart TB
+    L0[空条目列表] --> L1
+    subgraph L1[第 1 层：bundle]
+        B1[dsh-base<br/>模型/工具/持久化/沙箱/审批]
+        B2[dsh-web-app 或 dsh-headless<br/>产品形态]
+    end
+    L1 --> L2[第 2 层：profile 的 cordis.patch.yml<br/>产品装配者的补丁]
+    L2 --> L3[第 3 层：home 级 cordis.patch.yml<br/>机器所有者的补丁]
+    L3 --> L4[第 4 层：命令行 --patch<br/>这一次运行的补丁]
+    L4 --> R[合成后的插件树<br/>这就是 --dump-config 的输出]
 ```
 
 每一层都是一份"补丁列表"：可以按 `id` 替换某个条目的整个 config，也可以 `insert` 新条目。**后加的层覆盖先加的层。**

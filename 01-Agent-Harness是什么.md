@@ -37,6 +37,35 @@
 | Agent 框架/SDK | 编排 agent 循环、工具调用的开发库 | 循环的代码 | OpenAI Agents SDK、LangChain |
 | Agent Harness | 可运行、可配置、带完整产品能力的宿主 | 循环的"生活条件" | DSH、Claude Code、Codex |
 
+这张图把它们在技术栈里的位置画出来——注意 Harness 横跨"模型之上的全部配套"：
+
+```mermaid
+flowchart TB
+    subgraph 模型层
+        M[大模型<br/>只负责思考]
+    end
+    subgraph 配套层[宿主配套：Harness 的领地]
+        LOOP[循环编排<br/>turn/step 主循环]
+        TOOLS[工具执行管线]
+        SESSION[会话与事件溯源]
+        SANDBOX[沙箱与权限]
+        UI[Web UI / 观测]
+    end
+    subgraph 世界
+        FS[文件系统]
+        SH[命令/shell]
+        NET[网络/搜索]
+    end
+    M -->|API 调用| LOOP
+    LOOP --> TOOLS
+    TOOLS --> FS
+    TOOLS --> SH
+    TOOLS --> NET
+    SESSION -. 记录一切 .-> LOOP
+    SANDBOX -. 约束 .-> TOOLS
+    UI -. 展示/交互 .-> LOOP
+```
+
 区别的关键一句话：**框架是库，你用代码拼自己的应用；Harness 是产品，你通过配置和插件定制它。** 框架给你“循环”，Harness 给你“循环 + 沙箱 + 会话 + 权限 + UI + 审计”——后者才是真正能长期运行的东西。
 
 ## 1.3 DSH 的核心主张：一切皆插件
