@@ -48,8 +48,10 @@ corepack pnpm run hygiene          # knip + publint + 约束
 ```powershell
 corepack pnpm run build:lib        # 只构建库（改 Remote 签名后必跑）
 corepack pnpm --filter @deepseek-ai/dsh-web-frontend run build  # 只构建 Web 前端
-corepack pnpm run demo:cordis      # 演示“Agent 修改自身运行时”（需 Key，危险）
-corepack pnpm run demo:acp         # ACP 自动化服务器（需 Key）
+corepack pnpm run build:desktop    # 构建桌面应用 Electron 产物
+corepack pnpm run dev:desktop      # 开发模式启动桌面应用
+corepack pnpm run demo:ptc         # 演示并行工具调用（PTC）
+corepack pnpm run demo:inspector   # 启动内置 inspector（web + 监控补丁）
 ```
 
 ## 用户级目录（~/.dsh）

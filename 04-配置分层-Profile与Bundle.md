@@ -50,18 +50,27 @@ DSH 完全可以生成一份"最终配置"文件让你直接编辑——很多�
 - `cordis.patch.yml`：**你的补丁层**（改这里）；
 - `node_modules`：profile 专属的插件安装位置。
 
-`web` 和 `headless` 是仓库内置的两个模板。以 `web` 为例，它的 bundle 列表是：
+DSH 内置**四个** profile 模板（`packages/boot/app-boot/src/profile.ts` 的 `PROFILE_TEMPLATES`）：
+
+| 模板 | bundles | 补丁热加载 | 产品形态 |
+| --- | --- | --- | --- |
+| `web` | `dsh-base` + `dsh-web-app` | `live`（运行中可重载补丁） | 浏览器应用 |
+| `headless` | `dsh-base` + `dsh-headless` | `startup`（启动时读取） | 一次性任务 CLI |
+| `sdk` | `dsh-base` + `dsh-sdk-app` | `startup` | SDK 应用（供程序驱动） |
+| `sdk-minimal` | `dsh-sdk-minimal` | `startup` | 最小 SDK 装配 |
+
+每个模板现在是一个对象（`{ bundles, patchReload }`），而不是单纯的 bundle 数组——多出来的 `patchReload` 控制"补丁层能否在运行时热重载"：`web` 允许 `live`（改补丁即生效），其余是 `startup`（重启后生效）。
+
+以 `web` 为例，它的 bundle 列表是：
 
 ```text
-name: dsh-profile-web
-dsh:
-  profile:
-    bundles:
-      - @deepseek-ai/dsh-base
-      - @deepseek-ai/dsh-web-app
+web: {
+  bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
+  patchReload: 'live'
+}
 ```
 
-**同一个配置，不同 profile 就是不同的产品**：`web` 是浏览器应用，`headless` 是一次性跑任务的命令行工具。
+**同一个配置，不同 profile 就是不同的产品**：`web` 是浏览器应用，`headless` 是一次性跑任务的 CLI，`sdk`/`sdk-minimal` 是给程序调用的装配。
 
 ## 4.4 Bundle：插件发行单元
 
@@ -77,13 +86,18 @@ dsh:
 - `dsh.profile`：profile 用它列出 bundles；
 - `dsh.bundle`：bundle 用它指向自己的补丁文件。
 
-bundle 的价值：**它插入的东西仍然可以被上层补丁改写**——这意味着插件作者可以提供"好用的默认值"，而装配者永远保留"最终决定权"。三个关键 bundle：
+bundle 的价值：**它插入的东西仍然可以被上层补丁改写**——这意味着插件作者可以提供"好用的默认值"，而装配者永远保留"最终决定权"。`packages/bundle/` 下的关键 bundle：
 
 | Bundle | 作用 |
 | --- | --- |
-| `dsh-base` | 每个 profile 的第一层：模型适配、工具、持久化、沙箱与审批策略、设置、凭据、遥测 |
+| `dsh-base` | 几乎所有 profile 的第一层：模型适配、工具、持久化、沙箱与审批策略、设置、凭据、遥测 |
 | `dsh-web-app` | 浏览器应用（Web UI） |
-| `dsh-headless` | 一次性运行器，没有服务器 |
+| `dsh-headless` | 一次性运行器，没有 Host/HTTP（`web` 与 `headless` 共享 base） |
+| `dsh-acp-app` | ACP（Agent Client Protocol）应用装配 |
+| `dsh-sdk-app` | SDK 应用装配（供程序驱动） |
+| `dsh-sdk-minimal` | 最小 SDK 装配 |
+
+每个 bundle 的补丁文件就在 `packages/bundle/<名字>/cordis.patch.yml`——这也是早期 `examples/` 目录退役后，你查看"真实装配配置"的地方。
 
 ## 4.5 应用顺序与覆盖规则：两条规则，别无其他
 

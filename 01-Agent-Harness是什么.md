@@ -102,22 +102,27 @@ DSH 的 README 第一句是：
 克隆仓库后，顶层目录大致是：
 
 ```text
-packages/   @deepseek-ai/dsh-* 的 222 个包（按能力分组）
+packages/   @deepseek-ai/dsh-* 的 268 个包（按能力分组，共 51 个分组）
   core/     产品 API 主干：session、system-prompt、tools、agent、agent-loop
   api/      远程 BFF 与 Typert RPC 网关
   typert/   类型图生成器、加载器、运行时注册表
   llm/      LLM 能力：服务定义 + DeepSeek 等 Provider
   shell/    bash 能力   subprocess/ 子进程能力   sandbox/ 沙箱能力
-  session/  会话持久化   sdk/  JSON-RPC 协议、服务器、TS 客户端
-  ...       （共 40+ 个分组）
-apps/      CLI 入口（dsh 命令）   vendor/  vendor 进来的 Cordis 源码
-native/    Landlock 原生启动器   examples/ 最小配置（headless-agent、web-cordis 等）
-docs/      官方文档   python/  Python SDK
+  session/  会话持久化 + **会话格式版本迁移**（session-format-v0-to-v1…）
+  bundle/   产品装配层：base / web-app / headless / acp-app / sdk-app / sdk-minimal
+  experimental/  实验性能力：agent-team（多 Agent 团队）、inspector 等
+  webhook/  外部事件接入（webhook、webhook-github）
+  ...       （共 51 个分组）
+apps/      cli（dsh 命令）、web、desktop（Electron 桌面）、desktop-host
+vendor/    vendor 进来的 Cordis 源码   native/system  Landlock 原生启动器
+docs/      官方文档   python/  Python SDK   benchmarks/  基准依赖
 ```
+
+> 注：早期版本的顶层 `examples/` 目录已退役（`refactor(repo): retire top-level examples`）——可运行的参考配置现在分布在 `packages/bundle/*/cordis.patch.yml` 与各包 README。
 
 先记两个贯穿全书的概念（第 4 章细讲）：
 
-- **Profile（配置文件组合）**：一个命名的"启动配方"，定义挂哪些插件包、带哪些补丁。`web`、`headless` 是内置模板——**同一个底座，不同配方，就是不同的产品**；
+- **Profile（配置文件组合）**：一个命名的"启动配方"，定义挂哪些插件包、带哪些补丁。`web`、`headless`、`sdk`、`sdk-minimal` 是内置模板——**同一个底座，不同配方，就是不同的产品**；
 - **Bundle（插件包）**：插件代码 + 配置行的发行单元。`dsh-base` 是每个 profile 的第一层（模型、工具、持久化、沙箱、审批等）。
 
 ## 1.6 与同类系统的对比：设计取向，而非优劣
