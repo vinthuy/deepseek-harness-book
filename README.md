@@ -3,7 +3,7 @@
 > 从零开始理解并动手使用 DeepSeek Harness（DSH）——一个"一切皆插件"的 Agent 运行时与框架。
 > 这本书不仅是教程，更是一次对现代 Coding Agent 系统的设计解剖：它为什么长这样、它解决了什么、代价是什么、未来会走向哪里。
 
-本书基于 2026 年 8 月开源的 `deepseek-ai/deepseek-harness` 源码（版本 `0.1.0-rc.5`）撰写。目标读者是：
+本书基于 `deepseek-ai/deepseek-harness` 源码撰写，版本基准 **`0.1.5-rc.2`**（packages 下 268 个包，含 vendor/apps 等共 290 个 workspace 包）。目标读者是：
 
 - 听说过 Agent Harness、想弄明白它和"模型/API/Agent 框架"有什么区别的开发者；
 - 想在本地跑起 DSH、读懂它的插件机制并开始写自己插件的工程师；

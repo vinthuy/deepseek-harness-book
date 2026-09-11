@@ -111,7 +111,7 @@ DSH 的答案是**把判定标准显式化**："没有欠账"（没有进行中�
 
 ## 7.6 并行工具调用与超时：别让模型卡住
 
-- 模型可以一次请求多个工具调用（`tool/call*` 复数），DSH 支持并行执行，数量上限有配置（`DEFAULT_MAX_PARALLEL_TOOL_CALLS`）；
+- 模型可以一次请求多个工具调用（`tool/call*` 复数），DSH 支持并行执行，数量上限有配置（`maxParallelSubCalls`，旧版用 `DEFAULT_MAX_PARALLEL_TOOL_CALLS`）；
 - 每个工具执行带超时与取消：`exec.signal` 是必须遵守的取消信号（第 8 章详述）；
 - `packages/guard/` 里有两个"循环卫生"插件，防止循环失控：
   - `dsh-repeat-tool-reminder`：监视对同一工具的连续重复调用，达到阈值时注入提醒，让模型停下来重新读结果或换思路——它是"咨询性"的，不拦截、不否决，决定权始终在模型；
