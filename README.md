@@ -3,7 +3,7 @@
 > 从零开始理解并动手使用 DeepSeek Harness（DSH）——一个"一切皆插件"的 Agent 运行时与框架。
 > 这本书不仅是教程，更是一次对现代 Coding Agent 系统的设计解剖：它为什么长这样、它解决了什么、代价是什么、未来会走向哪里。
 
-本书基于 `deepseek-ai/deepseek-harness` 源码撰写，版本基准 **`0.1.5-rc.2`**（packages 下 268 个包，含 vendor/apps 等共 290 个 workspace 包）。目标读者是：
+本书基于 `deepseek-ai/deepseek-harness` 源码撰写，版本基准 **`0.1.7-rc.2`**（`packages/*/*` 下 54 个分组、312 个包；含 vendor/native/apps/benchmarks/website/python 共 334 个 workspace 包）。相对上一版基准 `0.1.5-rc.2`，本版按最新源码逐章重写：E2B 远程沙箱移除、SSH 远程执行、DeepSeek 账号登录、PTC 运行时、浏览器/电脑操作、Office 文档、会话格式 v4、工具调用三阶段、声明式 preset 与可选 bundle 等变化都已纳入。目标读者是：
 
 - 听说过 Agent Harness、想弄明白它和"模型/API/Agent 框架"有什么区别的开发者；
 - 想在本地跑起 DSH、读懂它的插件机制并开始写自己插件的工程师；
@@ -54,7 +54,7 @@
 
 - Node.js `^22.19.0 || >=24.0.0`（本书示例使用 v24）
 - pnpm（推荐通过 `corepack pnpm` 调用，仓库锁定 `pnpm@11.7.0`）
-- 一个 DeepSeek API Key（跑真实模型时需要；不跑模型也能完成绝大多数章节的练习）
+- 一个 DeepSeek API Key（`deepseek-official` 路由），或 DeepSeek 账号登录（`deepseek-account` 路由，内置登录界面在桌面端）；只在跑真实模型时需要，不跑模型也能完成绝大多数章节的练习（第 2、9 章）
 - Git、能访问 GitHub/npm registry 的网络
 
 ## 与官方文档的关系
