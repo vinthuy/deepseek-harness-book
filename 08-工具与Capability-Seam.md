@@ -5,7 +5,8 @@
 > **本章你将学到**：
 > - 概念：工具管线、执行契约、接缝三角（定义 / Provider / Consumer）
 > - 设计：接缝 = 依赖倒置的极致（换 Provider 换执行世界）；为什么 E2B provider 被移除
-> - 新能力：后台任务接缝合并、工具输出 spill、动态工具更新、工具调用的三阶段呈现、PTC runtime、MCP 资源与服务器说明
+> - 新能力：后台任务接缝合并、工具输出 spill、动态工具更新、工具调用的三阶段呈现与参数预读、PTC runtime 与 native/ptc 二选一、MCP 资源与服务器说明
+> - 上一版基准 0.1.7-rc.2 → 0.2.1-alpha.2：工作目录与 worktree 接缝、SSH 辅助程序的显式启动模式、Python PTC 沙箱、`tool-schedule` 拆分、终端/Ralph/会话查询工具移入实验区
 > - 动手：读 `tool-bash` / `tool-fs` 生产级源码，画出"工具 → 管线 → 接缝 → Provider"
 
 ## 8.1 工具是什么：模型面与系统面
@@ -67,7 +68,7 @@ export function apply(ctx: Context) {
 - **抛出异常 = isError**：`execute` 抛错、返回值不符合 schema、渲染器出错、无法做无损 JSON 快照……都会被捕获并标记为失败，模型看到的是结构化错误而不是裸异常——**错误也是数据**。基础设施故障就抛；"命令以非零码退出"这种成功的领域结果，应该写进规范值里。
 - **快照与冻结**：参数在策略开始前被一次性物化为脱离的无损 JSON 并冻结；返回值同样被快照、校验、冻结后再交给 render——审计需要"当时到底是什么"。
 - **身份保护**：`exec.token`（不透明令牌）、`callId`、`name`、`arguments`、`agent`、必需的 `signal`，以及可选的 `parent`（外层传输的令牌，如 PTC 子调用）在派发期间不可变。只有 around 派发包装器能拿到可变视图，而且只能为了施加截止时间替换 `exec.signal`，不能移除它。
-- **UI 用的持久数据**：`output.presentationMeta(args, value)` 从同一个规范值派生可回放的 JSON，写在 `tool/result` 的 `meta` 上（比如 `write`/`edit` 实际应用的 diff 块），重放时卡片能原样重现。
+- **UI 用的持久数据**：`output.presentationMeta(args, value)` 从同一个规范值派生可回放的 JSON，写在 `tool/result` 的 `meta` 上（比如 `write`/`edit` 实际应用的 diff 块），重放时卡片能原样重现。0.2.1-alpha.1 起它对**成功的 PTC 嵌套调用**同样运行，结果记在 `tool/ptc-dispatch` 新增的可选 `meta` 上（持久化记录 `2026-10-05-ptc-operation-metadata`）——这样历史行能保留"操作当时"的目录和文件目标，即使会话后来切换了工作目录。投影出错会让这次嵌套调用以 `ToolOutputError` 失败，但程序拿到的规范值和模型内容不变。所以 `presentationMeta` 必须是纯函数，并且要同时经得起原生调用和嵌套调用两种场景。
 - **后台运行**：长任务用 `ctx.jobs.start(...)` 注册，工具立刻返回一个类型化句柄（如 `{ kind: 'background', jobId }`），模型用 `job_output` / `job_list` / `job_kill` 读取、列出、停止（`@deepseek-ai/dsh-tool-jobs`）。一旦任务 id 发布，就要用任务自有的取消信号而不是 `exec.signal`——外层调用取消只是"不再等"，不会杀掉已发布的工作。
 
 ### 后台任务接缝：一个环、一个投影、一条事件流
@@ -142,6 +143,13 @@ flowchart TD
 
 关键的克制在于：**preparing 只改变呈现**——不改变模型请求、工具派发时机、会话事件，也不改变持久格式；历史分页不会把已定稿的助手消息展开回实时增量，所以实时路径是 preparing → start → result，历史路径直接 start → result，两者的**最终状态相同**。
 
+### preparing 阶段能看到多少：惰性参数视图与参数顺序
+
+只显示工具名还不够：`write` / `edit` 想尽早显示文件路径和已写入的字数，`bash` / `run_code` 想在命令或程序流完之前先显示一句描述。笔记 `2026-09-24-preparing-tool-arguments.md` 为此做了两件事：
+
+- **惰性参数视图**：`@deepseek-ai/dsh-util-values` 的 `PartialArguments` 保存参数片段，只为顶层键建索引，**被请求的字段才解码**——问长度就只算长度（例如以 1024 字符为单位报告 `content` 的进度），问前缀就只解码前缀。解析发生在 Web 客户端的工具定义里而不是 React 组件里，所以行卡片和分组标题共享同一份结果；第三方工具无需注册就能拿到同一个视图。它不做正式的参数校验，也不新增任何会话事件；
+- **调整参数声明顺序**：模型基本按 schema 的 `required` 顺序生成参数，而 DSL 按属性声明顺序生成 `required`。所以 `tool-bash` / `tool-pwsh` 把 `description` 声明在 `command` 之前并在描述里加一句"先给出 `description`"，`run_code` 把 `description` 放在 `code` 之前，`write` / `edit` 把 `file_path` 放在最前。笔记记录了对真实 DeepSeek V4 API 的 310 次受控请求：只调整 `properties` 顺序几乎无效，连同 `required` 一起调整再加一句说明才稳定。这只是"鼓励"而非保证——参数顺序不对时，preparing 行退回只显示标题。
+
 ## 8.6 动态工具更新：工具集合在对话中途变化
 
 插件热加载、MCP 服务器重新同步，都会让工具集合在对话中途改变。不同 provider 对"新增工具"和"移除工具"的支持差异很大：有的支持延迟加载定义，有的能在历史里声明移除，有的都不支持。笔记 `2026-09-20-dynamic-tool-updates.md` 的设计把"逻辑事实"和"发给谁什么"分开：
@@ -199,6 +207,8 @@ flowchart LR
 
 现在仓库里的远程执行世界是 **POSIX SSH**（`packages/ssh/`）：`ctx.ssh`（`@deepseek-ai/dsh-ssh`）拥有一条经过认证的 OpenSSH 连接和已安装的辅助程序，`fs-ssh`、`subprocess-ssh`、`sandbox-ssh` 分别实现 `ctx.fs`、`ctx.subprocess`、`ctx.sandbox`。Harness 本身（凭据、模型传输、会话状态）仍在本地，文件和进程在远程主机上——工具代码一行不改。
 
+0.2.1-alpha.1 把远程辅助程序的启动方式做成了显式配置（升级指南 `ssh-helper-launch`）：`dsh-ssh` 顶层的 `node`、`bootstrapPath`、`bootstrapHash` 收进 `launch`，要么是 `launch: { kind: node-script }`（远端用 Node 跑辅助脚本），要么是 `launch: { kind: executable }`（打包好的可执行文件，`helper` 指向远端绝对路径、`helperHash` 取自归档里的 `manifest.json`）；客户端要求辅助程序使用**协议 2**，协议或摘要不匹配就必须把辅助程序和配置一起更新。打包版本由新包 `@deepseek-ai/dsh-ssh-helper-runtime`（`packages/ssh/ssh-helper-runtime`）构建：归档里内嵌 Node 运行时，远端不必安装 Node 或 npm 包，就能支持受管进程、终端、沙箱和内嵌的 PTC worker。远程 PTC provider 相应地用 `launch: ctx.ssh.ptcLaunch` 配置（`dsh-ptc-runtime-node` 自己的 `nodeExecutable` / `bootstrapPath` 也换成了 `launch`）。
+
 ### 纵深对比：接缝 vs 六边形架构（Ports & Adapters）
 
 你可能会说：这不就是"端口-适配器"（Hexagonal Architecture）吗？确实同源，但有一个关键差异值得点破：
@@ -218,6 +228,12 @@ flowchart LR
 
 这回答了第 1 章的问题："一切皆插件"为什么值钱？因为**执行环境**（本地/沙箱/远程）和**产品功能**（工具、UI、循环）被解耦了。你可以先在本地做出功能，再决定把它部署到什么环境——这个决定可以推迟到配置层。E2B 的去留本身也说明了这一点：一个 provider 家族被整体移除，消费者无需任何改动。
 
+### 新接缝：工作目录与 Git worktree
+
+接缝三角也适用于"状态"而不只是"执行"。0.2.1-alpha.1 新增的 `ctx.workingDirectory`（定义与实现都在 `@deepseek-ai/dsh-working-directory`，第 6 章）就是一个例子：一个会话投影拥有有效执行目录，消费者包括 `tool-working-directory`、`tool-fs`、`tool-bash`、`tool-pwsh`、`subagent` 和 SDK 的 JSON-RPC 服务器——`docs/tool-catalog.md` 里 `tool-fs-search`、`tool-lsp`、`tool-skill`、`run_code` 等工具的依赖也都多了一项 `ctx.workingDirectory`。这些工具不再各自从会话头部或进程目录解析相对路径，而是问同一个所有者；文件系统 Provider 负责校验目录变更，写权限仍锚定在原始项目上。
+
+在它之上，实验性的 `ctx.worktrees`（`@deepseek-ai/dsh-experimental-worktree`，`docs/subsystems/worktrees.md`）再叠一层：消费者工具 `create_worktree`（`@deepseek-ai/dsh-experimental-tool-worktree`）从一个钉住的本地提交创建新分支和 checkout（默认放在当前 checkout 根下的 `.agents/worktrees/<name>`），Git 准备成功之后才通过工作目录服务切过去；不 fetch、不复制未提交文件，离开时（`working_directory({ cd })`）保留分支和 checkout。它没有自己的"当前目录"状态——**状态只有一个所有者，能力只是在上面组合**。这一对包通过默认关闭的 Git Worktrees 可选 bundle 加载（bundle 就由 `dsh-experimental-tool-worktree` 这个包提供，在插件页启用时把两个包一起挂上）。
+
 ## 8.8 PTC Runtime：让模型写一段程序来调工具
 
 PTC（programmatic tool calling）模式下，模型可以写**一段程序**，在里面像调用普通异步函数一样调用工具，最后只把程序打印的输出和返回值带回上下文。这个执行能力是一条独立的接缝：
@@ -225,14 +241,20 @@ PTC（programmatic tool calling）模式下，模型可以写**一段程序**，
 | 包 | 角色 |
 | --- | --- |
 | `@deepseek-ai/dsh-ptc-runtime`（`packages/ptc-runtime/ptc-runtime`） | 定义 `ctx.ptcRuntime`：对宿主提供的异步绑定运行一个程序，报告它打印了什么、返回了什么 |
-| `@deepseek-ai/dsh-ptc-runtime-node` | 在全新的受管 Node 进程里、按解析出的沙箱策略执行 TypeScript |
-| `@deepseek-ai/dsh-experimental-ptc-runtime-python` | 实验性 Python 后端：Node 宿主与 CPython 子进程之间走 fd-3 线协议 |
+| `@deepseek-ai/dsh-ptc-runtime-node` | 在全新的受管 Node 进程里、按解析出的沙箱策略执行 TypeScript；本地或远程 worker 的启动方式由 `launch` 配置决定 |
+| `@deepseek-ai/dsh-experimental-ptc-runtime-python` | 实验性 Python 后端（仅 macOS / Linux 本地）：Node 宿主与 CPython 子进程之间走 fd-3 线协议 |
 
 消费者是 `dsh-tools`（它拥有保留的 `run_code` 传输工具与 PTC 呈现）和 `dsh-workflow-ptc`（工作流编排）。
+
+Python 后端在 0.2.1-alpha.1 补上了文件沙箱（升级指南 `python-ptc-sandbox`）：此前程序里直接的 Python 文件操作不受限制，现在 provider **必须**依赖 `sandbox` 与 `sandboxPolicy` 服务，对每个程序应用共享的沙箱策略，并在 `PtcRunResult.sandbox` 里报告实际的隔离情况；受限运行无法建立隔离时以 `sandbox-unavailable` 失败，而不是"悄悄不隔离"。仓库自带的 profile 仍使用 Node 运行时。
 
 > **命名更正**：旧稿中的 `code-runtime` / `code-runtime-python` 等叫法已经过时。笔记 `2026-09-12-ptc-runtime-vocabulary.md` 统一了词汇：包族 `ptc-runtime`、类型 `PtcRuntime`、服务 `ctx.ptcRuntime`，**没有**保留旧名的兼容包或第二个服务注册。面向模型的 `run_code` 工具及其 `code` 参数名保持不变。
 
 PTC 模式对工具作者是"免费"的：每个可见的已注册工具都能在程序里以 `await tools.<name>(args)` 调用，参数和返回值类型从同一套 schema 生成；子调用**重新进入完整的管线**（策略、守卫、审批一个不少），携带父令牌，记录 `tool/ptc-dispatch` 事件，成功时拿到的是策略之后的**规范值**而不是渲染文本——这正是 8.3 节"返回值必须结构化"的回报。子调用的并发上限是 `dsh-tools` 的 `maxParallelSubCalls`（默认 10）。
+
+### 每个 Agent 只用一种调用形式：native 或 ptc
+
+上一版基准里，工具呈现模式有三种：`native`（每个工具一个函数 schema）、`ptc`（只暴露 `run_code` 和生成的 SDK），以及混合的 `both`。笔记 `2026-10-05-native-or-ptc-presentation.md` 删除了 `both`：同一批能力同时以两种形式出现在请求里，只带来 schema 排序、准入、配置和测试组合的膨胀，并没有新的执行能力。现在 `@deepseek-ai/dsh-tools` 和 `@deepseek-ai/dsh-agent-tool-presentation` 的 `mode` 只接受 `native` 或 `ptc`，配置 `both`（包括环境变量 `DSH_TOOLS_MODE=both`）会被拒绝，而不是被悄悄映射成另一种；代码里的 `ctx.tools.presentAs('both')` 也要改成二选一（升级指南 `tool-presentation-mode`）。不同 preset 仍然可以在同一个应用里选不同模式——"二选一"是按 Agent 的，不是按进程的。
 
 ## 8.9 MCP：外部工具、资源与服务器说明
 
@@ -253,7 +275,7 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 | `ctx.fs` | 文件系统 | `fs-local`、`fs-sandbox`、`fs-ssh` |
 | `ctx.subprocess` | 子进程 | `subprocess-local`、`subprocess-ssh` |
 | `ctx.shell` | Bash / PowerShell 执行器 | `bash-local`、`bash-sandbox`、`pwsh-local`、`pwsh-sandbox` |
-| `ctx.terminals` | 持久终端（PTY） | `terminal-bash` |
+| `ctx.terminals` | 持久终端（PTY） | `terminal-bash`（模型工具 `tool-terminal` 已移入实验区） |
 | `ctx.sandbox` | 进程沙箱 | `sandbox-local`（平台原生）、`sandbox-ssh` |
 | `ctx.jobs` | 后台任务注册表 | `jobs-local` |
 | `ctx.spillStore` | 大输出存储 | `spill-local` |
@@ -261,18 +283,23 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 | `ctx.mcpResources` | MCP 资源访问 | `mcp-client` |
 | `ctx.web` | 搜索 / 抓取 | `web-search-exa`、`web-search-perplexity`、`web-search-deepseek`、`web-fetch-http` |
 | `ctx.lsp` | 语言服务导航 | `lsp-stdio` |
-| `ctx.skills` | 技能 | `skill-filesystem`、`skill-badge`、`skill-office` |
+| `ctx.skills` | 技能 | `skill-filesystem`、`skill-office`、`sandbox-windows-acl`、`skill-badge`（实验区） |
 | `ctx.subagents` | 子 Agent | `subagent-spawn-in-process`、`subagent-fork-in-process`、`subagent-acp`、`subagent-codex`、`subagent-claude-code`、`subagent-dsh-sdk` |
 | `ctx.credentials` | 凭据 | `credentials-local` |
 | `ctx.storage` | 非会话存储 | `storage-json`、`storage-sqlite` |
 | `ctx.sessionPersistence` | 会话持久化 | `session-persistence-jsonl` |
+| `ctx.workingDirectory` | 会话工作目录 | `working-directory` |
+| `ctx.worktrees` | Git worktree 创建（实验） | `experimental-worktree` |
+
+> **包位置变化**（上一版基准 0.1.7-rc.2 → 0.2.1-alpha.2）：持久终端的六个模型工具（`@deepseek-ai/dsh-tool-terminal`）、Ralph 循环工具（`@deepseek-ai/dsh-tool-ralph`）和会话查询工具（`@deepseek-ai/dsh-tool-session-query`）都搬进了 `packages/experimental/`，包名不变，分别由默认关闭的可选 bundle `@deepseek-ai/dsh-experimental-terminal-bundle`、`@deepseek-ai/dsh-experimental-ralph-bundle`、`@deepseek-ai/dsh-experimental-session-search` 加载。提醒管理工具则从 `@deepseek-ai/dsh-schedule` 里拆出成独立包 `@deepseek-ai/dsh-tool-schedule`（`schedule_create` / `schedule_list` / `schedule_update` / `schedule_delete`），由 preset 或 Agent 作用域挂载、由 preset 决定哪些 Agent 拿到它们；Schedule 服务本身由 Web 组合直接挂载（旧的 Automation tasks 可选 bundle 已退役，升级指南 `schedule-bundle-retired`）。这些都是"组合层"的移动——接缝和工具管线没有变。
 
 注意这张表的读法：**每一行都是一条"换 Provider 的选项"**。产品在左，实现在右，中间是稳定的接口。完整的、由脚本从 Cordis 声明生成的清单（含每个接缝的直接消费者和伴随插件）见 `docs/capability-seams.md`；每个工具包注册了哪些工具、依赖哪些服务，见 `docs/tool-catalog.md`。
 
 ## 8.11 动手实验：读一个真实工具
 
 1. 打开 `packages/shell/tool-bash` 的源码（官方指定的生产级三包示例），回答：
-   - 它的 `presentCall` 返回什么卡片？（terminal 卡片，`title` 就是命令）
+   - 它的 `presentCall` 返回什么卡片？（terminal 卡片，`title` 就是命令，`description` 参数作为说明）为什么 schema 里 `description` 声明在 `command` 之前？（提示：8.5 节的参数顺序）
+   - 顺带看一眼客户端的 `TerminalBlock`（`@deepseek-ai/dsh-client-ui-primitives`）：0.2.1-alpha.1 起它的 `TerminalBlockLabels` 必须提供 `commandLine(line)`，为横向溢出的命令行生成本地化的无障碍名称，让键盘可以聚焦并滚动长命令（升级指南 `terminal-command-labels`）——这是纯呈现层的契约，不影响模型看到的内容
    - 它消费的是哪个接缝？（`ctx.shell`；真正 spawn 进程、套沙箱的是 `bash-local` / `bash-sandbox` 这些 Provider，它们再依赖 `ctx.subprocess` / `ctx.sandbox`）
    - 它什么时候提供 `run_in_background` 参数？（组合了 `ctx.jobs` 且没有设置 `enableRunInBackground: false` 时；否则注册不含该参数的纯前台 schema）
 2. 打开 `packages/fs/tool-fs`，看 `write` / `edit` 的 `presentCall` / `presentResult` 与 `output.presentationMeta`：diff 卡片的数据从哪来？为什么 `write` 的 `oldText` 是 `null`？（提示：呈现函数必须是纯函数，拿不到文件旧内容）
@@ -287,7 +314,10 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 - **后台任务发布后还用 `exec.signal` 控制它**：外层调用取消不应杀掉已发布的任务，要用任务自有的信号；
 - **把 UI 格式化塞进模型结果**：模型看到的是 render 出的内容；UI 卡片是独立的呈现投影（`presentCall` / `presentResult` / `presentationMeta`），别混在一起。另外，内置 Web 客户端**不**消费 `presentCall` / `presentResult`，它从原始 `tool/call` / `tool/result` 事件和 `meta` 派生卡片；
 - **以为同名工具可以随意改 schema 而没有代价**：可以改，但会重建工具声明、放弃前缀缓存；
-- **在 PTC 程序里解析工具的渲染文本来拿 id**：用规范值。
+- **在 PTC 程序里解析工具的渲染文本来拿 id**：用规范值；
+- **还在配置 `mode: both` 或 `DSH_TOOLS_MODE=both`**：已被拒绝，每个 Agent 选 `native` 或 `ptc`；
+- **工具自己从会话头部或 `process.cwd()` 解析相对路径**：用 `ctx.workingDirectory`，否则会话切换目录后你的工具会读写错项目；
+- **假设 `presentationMeta` 只在原生顶层调用时运行**：嵌套 PTC 调用也会运行它，投影要纯、要能识别操作的真实目标。
 
 ## 8.13 思考题
 
@@ -296,13 +326,15 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 3. 想一想：如果 DSH 没有接缝，而是让工具直接 import 本地 fs 实现，第 10 章的沙箱还能工作吗？接缝和沙箱是什么关系？
 4. E2B provider 因为"缺一条独立控制通道"而被移除。如果让你为某个新的远程执行平台写一组 Provider，你会先确认它具备哪些能力？（提示：对照笔记中列出的控制通道、有界缓冲、关闭语义、断连清理）
 5. 动态工具更新把"逻辑事实（活跃工具与增减）"和"发给 provider 的形式"分开。如果反过来直接把 provider 格式存进日志，换一个不支持工具更新的模型继续这个会话时会发生什么？
+6. `create_worktree` 没有自己的"当前目录"状态，而是建好 checkout 后调用工作目录服务切过去。如果让 worktree 工具自己维护目录状态，文件工具、shell、子 Agent 分别会遇到什么不一致？
 
 ## 小结
 
 - 工具 = 模型与世界的闸门：参数校验、策略、执行、结果规范化、UI 呈现；schema 自动进入请求并记录在 `request/header` 中；
 - 管线：`tools/pre-execute` → 审批 / 单调守卫 → `tools/execute` → 工具本体 → `tools/post-execute` → `tools/result`；spill、超时、钩子都以插件形式挂在管线上；
 - 接缝三角：定义 / Provider / Consumer——换 Provider 换执行世界；E2B 被移除、远程执行世界如今由 POSIX SSH 这组 Provider 提供，消费者无需改动；
-- 新能力各守边界：`ctx.jobs` 一环一投影一事件流；工具调用三阶段只改呈现；动态工具更新不改持久格式；PTC runtime 统一为 `ptc-runtime` 词汇；MCP 的资源和说明都经由日志进入模型；
+- 新能力各守边界：`ctx.jobs` 一环一投影一事件流；工具调用三阶段与参数预读只改呈现；动态工具更新不改持久格式；PTC runtime 统一为 `ptc-runtime` 词汇，每个 Agent 在 native / ptc 中二选一，Python 后端强制共享沙箱；MCP 的资源和说明都经由日志进入模型；
+- 0.2 系列新增 `ctx.workingDirectory` 与实验性 `ctx.worktrees`，SSH 辅助程序改为显式 `launch` 模式并可打包内嵌 Node；终端、Ralph、会话查询工具移入实验区，提醒工具拆为 `tool-schedule`；
 - 生产级参考：`tool-bash`（terminal 卡片）、`tool-fs`（diff 卡片）。
 
 下一章：把模型接进来——`ctx.llm` 与凭据，以及"密钥绝不进配置"这条纪律。

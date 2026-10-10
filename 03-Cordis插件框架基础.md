@@ -31,7 +31,14 @@
 | `vendor/schemastery` | `@deepseek-ai/schemastery` | 配置 schema 校验库 |
 | `vendor/cosmokit` | `@deepseek-ai/cosmokit` | 工具函数库 |
 
-"原样"并不等于"一字不改"：`vendor/README.md` 里有一份要求**穷举**的 *Local modifications* 清单，记录每一处与上游的差异（例如 `applyEntryPatches` 的导出、Fiber 的可重入销毁加固、可恢复的文件刷新等），以及从上游同步时如何重新套用这些修改。vendor 的价值恰恰在这里：**可以改，但每一处改动都有账可查**。
+"原样"并不等于"一字不改"：`vendor/README.md` 里有一份要求**穷举**的 *Local modifications* 清单，记录每一处与上游的差异（例如 `applyEntryPatches` 的导出、Fiber 的可重入销毁加固、可恢复的文件刷新、volatile 配置等），以及从上游同步时如何重新套用这些修改。vendor 的价值恰恰在这里：**可以改，但每一处改动都有账可查**。
+
+从上一版基准 0.1.7-rc.2 到 0.2.1-alpha.2，vendor 层的变化很小，正好可以拿来看这本账怎么记：
+
+- 9 个包统一发了一轮预发布版本（例如 `@deepseek-ai/cordis` 从 `4.0.4` 变为 `4.0.5-alpha.1`，`cordis-plugin-loader` 从 `1.0.5` 变为 `1.0.6-alpha.1`）；
+- 清单新增了第 23 条：`vendor/loader/src/config/entry.ts` 里的每个条目（Entry）现在保留一个 `moduleNamespace` 字段——"导出规范化之前"的原始导入结果。DSH 的 HMR 用它去和 Node 缓存的模块命名空间做匹配，热重载成功后才更新它；`loader/README.md` 也同步记录了这个新增字段。这条修改服务于 0.2.1 的"插件包刷新"（第 4 章 4.8 节）：一个包的 `package.json` 变了，HMR 要能准确找到"哪些条目加载的是这个模块"。
+
+注意它的写法：**只加字段、不改 `EntryTree.import()` 的参数和返回值**。对 vendor 代码做"增量、可描述、可重放"的修改，才能让下一次从上游同步时不至于变成一场考古。
 
 Cordis 本身是一个通用的 Node.js 应用框架：**插件贡献服务、类型化事件、可逆副作用，共享同一个 Context**。DSH 没有另起炉灶，而是把整个产品建在它上面——理解下面五个概念，就等于理解了 DSH 的地基。官方文档对应的是 `docs/cordis-primer.md`（五个概念的速览）、`docs/cordis-tutorial/`（七章动手教程，不需要 API Key）和 `docs/cordis-api/`（从源码生成的 API 参考）。
 
@@ -169,6 +176,15 @@ DSH 的产品功能就是一张服务表（下表的提供者均为 HEAD 源码�
 
 好处是**面向接口编程**：工具插件只依赖 `ctx.tools` 这个抽象，不关心它背后是谁实现的（第 8 章会看到这个抽象的力量）。
 
+### 设计思考：一个服务被整体删掉时发生了什么——运行时不变量的退场
+
+"服务 = 插件贡献的能力"还有一个反面推论：**能力不想要了，删掉插件行就行**。0.2.x 里就有一个现成的例子（升级指南 `docs/upgrade-guide/v0.2.0-rc.2/remove-runtime-invariants/`）：
+
+- 在 0.2.0-rc.2 及之前，`@deepseek-ai/dsh-invariants` 提供一个 `ctx.invariants` 服务，`dsh-session`、`dsh-agent`、`dsh-scope`、`dsh-agent-loop` 等包各自发布一个 `./invariant` 子路径的"伴生插件"，向它登记运行时检查；`sdk-minimal` profile 里挂着 `invariants`、`session-invariant` 等五行；
+- 0.2.1-alpha.1 起，这个包、`InvariantRegistry` 等符号以及所有 `<包>/invariant` 子路径都不再发布，`sdk-minimal` 也去掉了那五行；对应的 `docs/subsystems/invariants.md` 一并删除。
+
+删除过程本身就是本章概念的演示：因为它们只是"插件 + 服务 + 配置行"，删掉之后其他插件不需要改一行代码；残留的配置会以普通方式报出来——名字指向已删除模块的行**加载失败**，按 id 命中那五行的补丁只得到 `patch: entry <id> not found` 警告（第 4 章）。唯一需要注意的行为变化落在事件上：`credentials/reference-updated`、`credentials/record-updated`、`authorization/settled`、`llm/adapters-updated` 这四个 emit 现在会**捕获并记录**每个监听器的失败（包括 `code: 'INVARIANT'` 的错误），而不是重新抛出——依赖"监听器抛错能打断生产者"的插件，要改走自己的报告渠道。这正是第 5 章"emit 是观察语义"的另一种表述。
+
 ### 纵深对比：Cordis vs 传统 DI 容器（Spring / Inversify）
 
 如果你用过 Spring 或 Inversify，会觉得 Cordis 的 Context + inject 似曾相识——它们都解决"依赖注入"。但有一个本质区别，值得停下来想清楚：
@@ -269,7 +285,7 @@ export function apply(ctx: Context, config: Config) {
 
 ## 3.8 动手实验：挂一个补丁 overlay
 
-不写任何代码，先体验"配置即扩展"。Web 应用的 `webserver` 条目在 `packages/bundle/web-app/cordis.patch.yml` 里是这样写的：
+不写任何代码，先体验"配置即扩展"。Web 应用的 `webserver` 条目在 `packages/bundle/web-app/cordis.patch.yml` 里是这样写的（它位于该文件的一个 `insert` 列表里，这里只摘出这一行）：
 
 ```yaml
 - id: webserver
@@ -278,24 +294,28 @@ export function apply(ctx: Context, config: Config) {
   config:
     host: !!js ctx.webStartup.host ?? '127.0.0.1'
     port: !!js ctx.webStartup.port ?? 3080
+    tls: !!js ctx.webStartup.tls
     compression: gzip
     compressionLevel: 1
     compressionThresholdBytes: 1024
 ```
 
-`ctx.webStartup` 是 Web 应用解析命令行参数（`--host`、`--port`……）后提供的服务；表达式的意思是"命令行给了就用命令行的，否则用后面的部署默认值"。
+`ctx.webStartup` 是 Web 应用解析命令行参数（`--host`、`--port`……）后提供的服务；表达式的意思是"命令行给了就用命令行的，否则用后面的部署默认值"。`tls` 一行是 0.2.x 新增的：它同样完全来自启动参数，没有部署默认值。
 
-1. 在 deepseek-harness 根目录新建 `my-patch.yml`，把默认端口改成 3081——注意要把**整个 config 重写一遍**，并且保留表达式：
+1. 在 deepseek-harness 根目录新建 `my-patch.yml`，把默认端口改成 3081——注意要把**整个 config 重写一遍**（包括 `tls` 这一行），并且保留表达式：
 
 ```yaml
 - id: webserver
   config:
     host: !!js ctx.webStartup.host ?? '127.0.0.1'
     port: !!js ctx.webStartup.port ?? 3081
+    tls: !!js ctx.webStartup.tls
     compression: gzip
     compressionLevel: 1
     compressionThresholdBytes: 1024
 ```
+
+如果漏写了 `tls`，补丁照样生效，但"从命令行开启 TLS"的能力就随之消失了——这正是"整体替换 config"的代价（第 4 章 4.6 节）。
 
 2. 先不启动，看合成结果（源码运行前需要已经执行过 `corepack pnpm run build`，见第 2 章）：
 
@@ -321,11 +341,13 @@ corepack pnpm dsh web --patch .\my-patch.yml
 2. 可逆副作用让"卸载干净"成为保证。设想一个插件在 `apply` 里直接 `setInterval` 而没有包进 `ctx.effect()`——系统会怎样？如果它有两个异步清理步骤必须先后执行，却分别注册成两个 effect，又会怎样？
 3. `inject` 让框架推导加载顺序，而一个 `inject` 了不存在服务的插件会安静地停在 PENDING。为什么 Cordis 选择"安静等待"而不是"启动时报错"？DSH 又是在哪一层把"必需插件没激活"变成启动失败的？
 4. Loader 从"事务式重载"退回"非事务式"。站在一个正在编辑 profile 补丁的用户的角度，这两种语义各自给他什么体验？你认为"自动回滚"值得那么多额外的生命周期代码吗？
+5. 运行时不变量服务（`ctx.invariants`）被整体移除后，四个凭据/授权/模型适配器相关的 emit 改为"捕获并记录监听器失败"。为什么一个"观察型"事件不应该让监听器的异常传回生产者？如果你确实需要"某个检查失败就让操作失败"，应该用哪种分发模式来表达？
 
 ## 小结
 
-- DSH 不自己写插件框架，而是以源码形式 vendor 了 Cordis 及其 8 个配套包，所有本地修改都在 `vendor/README.md` 里记账；
+- DSH 不自己写插件框架，而是以源码形式 vendor 了 Cordis 及其 8 个配套包，所有本地修改都在 `vendor/README.md` 里记账（0.2.x 新增的一条是 Loader 条目保留 `moduleNamespace`，供 HMR 识别模块身份）；
 - 五个概念：插件（三种形态）、Context、inject、类型化事件（五种分发模式）、可逆副作用；每个插件实例由一个 Fiber 承载，PENDING 是合法状态；
+- 能力即服务：DSH 的产品功能是一张服务表；不再需要的能力（如 0.2.1 移除的运行时不变量服务）删掉插件行即可退场；
 - 可逆副作用是插件化的灵魂：销毁逆序启动、异步销毁并发执行，顺序敏感的清理放进同一个 effect；
 - 配置即开关：条目 + schema 校验；volatile 字段可以不重启就更新；`!!js` 只在 `config` 与 `disabled` 中求值；
 - Loader 是非事务式的：失败不回滚，由应用层审计激活结果并大声报错。

@@ -97,38 +97,43 @@ README 还指向了一篇论文 _A Programming Paradigm for Spatiotemporal Compo
 2. **管理会话状态**：每次交互追加进不可变日志，模型看到的上下文从日志推导，可回放、可恢复、可审计；日志格式带版本并可逐代迁移（第 6 章）；
 3. **权限与安全**：权限预设（新会话默认 `workspace-write`）+ 按需审批；不可信命令放进平台原生沙箱，沙箱不可用时直接失败（第 10 章）；
 4. **可观测与产品化**：Web UI、桌面应用、会话标题、用量统计、OTel 遥测、设置与凭据管理、插件管理页、定时提醒——这些都是插件，按 profile 组装（第 11、13 章）；
-5. **可编程接入**：CLI、ACP（Agent Client Protocol）、SDK JSON-RPC（TypeScript 与 Python SDK）、webhook 等多种入口（第 13 章）。
+5. **可编程接入**：CLI、ACP（Agent Client Protocol）、SDK JSON-RPC（TypeScript 与 Python SDK）等多种入口，另有需要显式安装的实验性 webhook 入口（第 13 章）。
 
 ## 1.5 仓库结构速览：一张地图
 
 克隆仓库后，顶层目录大致是：
 
 ```text
-packages/   312 个 @deepseek-ai/dsh-* 等包，按能力分组（git 跟踪的分组目录 54 个）
+packages/   331 个 @deepseek-ai/dsh-* 等包，按能力分组（git 跟踪的分组目录 52 个）
   core/     产品 API 主干：session、system-prompt、tools、agent、agent-loop、scope…
   llm/      LLM 服务 + DeepSeek（API Key / 账号登录）+ pi-ai 多提供方适配
   api/      Host 侧 Remote 控制器（会话、工作区、设置、账号、任务…）
   typert/   类型图生成器、加载器、运行时注册表
   shell/    bash / pwsh 执行      subprocess/ 子进程      sandbox/ 平台沙箱
-  ssh/      POSIX SSH 远程文件系统、子进程与沙箱
-  session/  会话持久化 + 会话格式迁移（session-format-v0-to-v1 … v3-to-v4）
+  ssh/      POSIX SSH 远程文件系统、子进程与沙箱，及私有的 helper 运行时载体
+  session/  会话持久化 + 格式迁移（v0-to-v1 … v3-to-v4）+ 会话工作目录
+  telemetry/  otel：OTLP 事件与会话日志通道服务
   bundle/   产品装配层：base / web-app / headless / sdk-app / sdk-minimal / acp-app
-  experimental/  实验能力：agent-team、auto-review、voice-input-bundle、browser-use-*…
+  experimental/  可选/实验能力（44 个包）：agent-team、auto-review、hooks-claude-code、
+                 webhook、tool-terminal、worktree、cot-translation-bundle、claude-code-mods…
   browser-use/ computer-use/ document/ deliverables/ ptc-runtime/ schedule/ …
 apps/      cli（dsh 命令）、web、desktop（Electron 桌面）、desktop-host
 vendor/    vendor 进来的 Cordis 系源码（9 个包）
 native/    system：Landlock 启动器与 flock 原生 addon（按平台分包）
-docs/      官方文档（中英双语）   .agents/notes/  设计笔记
+docs/      官方文档（中英双语，含 upgrade-guide/ 与生成的 cli-help.md）
+.agents/notes/  设计笔记
 python/    Python SDK 与 sdk-runtime   benchmarks/  基准   website/  文档站
 snapshots/ Web 快照测试场景   scripts/  构建、门禁、生成器脚本
 ```
 
-和上一版相比，有几个值得留意的结构变化：
+和本书上一版基准 `0.1.7-rc.2` 相比，有几个值得留意的结构变化：
 
-- **新增分组**：`browser-use`、`computer-use`（浏览器/桌面操作的服务注册）、`deliverables`（`present` 交付文件、工作区变更）、`document`（基于 LibreOffice kit 的 Office 转 PDF）、`ptc-runtime`（PTC 程序执行）、`ssh`（远程执行）。
-- **移除 E2B**：原先的 E2B 远程沙箱提供方已被删除，"远程执行"这件事现在由 `ssh` 分组承担——这恰好是能力接缝的一次活体演示：换掉一整类提供方，工具代码不受影响。
-- **PTC 运行时改名**：`code-runtime-python` 更名为实验性的 `ptc-runtime-python`，正式发布的执行提供方是 `ptc-runtime-node`（在沙箱化的 Node 进程里运行程序）。
-- 早期版本的顶层 `examples/` 目录已退役——可运行的参考配置现在分布在 `packages/bundle/*/cordis.patch.yml`、`apps/cli/config/examples/` 与各包 README 中。
+- **删除的分组**：`hooks`、`webhook`、`runtime-diagnostics`。前两组的包（`dsh-hook-protocol`、`dsh-hooks-claude-code`、`dsh-hooks-codex`、`dsh-webhook`、`dsh-webhook-github`）并没有消失，而是迁入 `experimental/`，包名不变；`runtime-diagnostics/invariants`（运行时不变式检查）则被整体删除。
+- **新增分组**：`telemetry`（`dsh-otel`，由 base 挂载的 OTLP 通道服务）。
+- **迁入 experimental 的工具与技能**：持久终端 `dsh-tool-terminal`、`dsh-tool-ralph`、`dsh-tool-session-query`、按全部提示词生成标题的 `session-title-all-prompts-llm`、徽章技能 `dsh-skill-badge`。它们都配上了可在插件管理页按需启用的组合包（如 `terminal-bundle`、`ralph-bundle`、`session-titles-bundle`、`badge-skill-bundle`）——**安装一个包和把它挂进配置树是两件独立的事**，第 4 章会再遇到这个区分。
+- **新能力**：`session/working-directory` 与 `session/tool-working-directory`（会话"当前目录"）、`schedule/tool-schedule`（四个 `schedule_*` 提醒工具）、`ssh/ssh-helper-runtime`、`client/product-analytics`（桌面端产品埋点），以及 experimental 下的 `worktree`/`tool-worktree`、CoT 翻译（`translator`、`cot-translation-bundle`）、`claude-code-mods`、`session-inspector`、`session-search` 等。
+- **历史沿革**（上一版已记录，仍然成立）：E2B 远程沙箱提供方早已删除，"远程执行"由 `ssh` 分组承担——换掉一整类提供方，工具代码不受影响，这正是能力接缝的活体演示；PTC 的正式执行提供方是 `ptc-runtime-node`，Python 版仍是实验性的 `experimental/ptc-runtime-python`。
+- 可运行的参考配置分布在 `packages/bundle/*/cordis.patch.yml`、`apps/cli/config/examples/`（目前只剩 `mcp-memory/` 下的三份 MCP 记忆示例）与各包 README 中；原先的 GitHub review 示例已随 webhook 适配器搬到 `packages/experimental/webhook-github/examples/github-review/`。
 
 先记两个贯穿全书的概念（第 4 章细讲）：
 
@@ -144,14 +149,15 @@ snapshots/ Web 快照测试场景   scripts/  构建、门禁、生成器脚本
 | 沙箱 | 平台原生，默认启用，不可用即失败 | 产品内置 | 由宿主自建 |
 | 会话模型 | 带版本的事件溯源日志 | 各自实现 | 无内建 |
 
-这不是"谁更好"的对比，而是**设计取向**不同：Claude Code 追求"开箱即用的产品体验"，DSH 追求"研究性和组合性最强的底座"。有意思的是，二者并不互斥——DSH 提供 `dsh-hooks-claude-code`、`dsh-hooks-codex` 兼容这两类产品的 hook 约定，还提供可选的 `dsh-subagent-codex`、`dsh-subagent-claude-code` 组合包，把它们作为子 Agent 提供方接进来。理解取向，你才知道什么场景该用哪个——以及，如果你想改它的行为，哪个改得动。
+这不是"谁更好"的对比，而是**设计取向**不同：Claude Code 追求"开箱即用的产品体验"，DSH 追求"研究性和组合性最强的底座"。有意思的是，二者并不互斥——DSH 在 `experimental/` 下提供 `dsh-hooks-claude-code`、`dsh-hooks-codex` 兼容这两类产品的 hook 约定（需要连同 `dsh-hook-protocol` 一起用 `dsh plugin` 显式安装），实验性的 `claude-code-mods` 还能把 Claude Code 的 hook 模块挂到 DSH 的扩展点上；另有可选的 `dsh-subagent-codex`、`dsh-subagent-claude-code` 组合包，把它们作为子 Agent 提供方接进来。理解取向，你才知道什么场景该用哪个——以及，如果你想改它的行为，哪个改得动。
 
 ## 1.7 动手实验
 
-1. 打开仓库根目录，`git log --oneline -5` 看最近提交，再运行 `git rev-list --count dsh-v0.1.5-rc.2..dsh-v0.1.7-rc.2` 感受迭代速度（这也是全书"以仓库为准"的由来）；
+1. 打开仓库根目录，`git log --oneline -5` 看最近提交，再运行 `git rev-list --count dsh-v0.1.7-rc.2..dsh-v0.2.1-alpha.2`（本书两版基准之间，结果为 1383）感受迭代速度——这也是全书"以仓库为准"的由来；
 2. 阅读 `docs/architecture.zh.md` 的前三节（Cordis、Profile 与组合包、应用启动）；
-3. 运行 `git ls-files "packages/*/*/package.json"`，数一数各分组下的包数，对照 1.5 节的结构说明（提示：这个 pathspec 里的 `*` 会跨越 `/`，要按路径段数过滤掉模板目录里的嵌套 `package.json`）；
-4. 阅读 `packages/bundle/web-app/cordis.patch.yml` 与 `apps/cli/config/examples/` 下的任意一个可选覆盖层——体会"一份 YAML 就是一次定制"。
+3. 运行 `git ls-files "packages/*/*/package.json"`，数一数各分组下的包数，对照 1.5 节的结构说明（提示：这个 pathspec 里的 `*` 会跨越 `/`，要按路径段数过滤掉模板目录里的嵌套 `package.json`，PowerShell 里可以接 `| Where-Object { ($_ -split '/').Count -eq 4 }`）；
+4. 阅读 `packages/bundle/web-app/cordis.patch.yml` 与 `apps/cli/config/examples/mcp-memory/` 下的任意一个可选覆盖层——体会"一份 YAML 就是一次定制"；
+5. 浏览 `docs/upgrade-guide/v0.2.1-alpha.1/` 下的目录名，挑一篇 `guide.zh.md`（例如 `experimental-package-composition`）读一读：一次破坏性变更会被拆成"变更"与"迁移"两段说明。
 
 ## 1.8 思考题
 

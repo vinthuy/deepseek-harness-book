@@ -7,6 +7,8 @@
 > - 设计：为什么是编译期类型图、为什么模型要"与编译器无关"、为什么输入只在宿主校验
 > - 动手：改一个 Remote 方法名感受构建期报错，用声明映射从调用跳到实现
 
+> **版本说明**：本章按 0.2.1-alpha.2 核对（上一版基准 0.1.7-rc.2）。`packages/typert/` 在这段时间只有小幅修正（`git log 477b4f4205..HEAD -- packages/typert` 共 18 个提交，近半是合并与发版提交）：生成器缓存了按文件的注册与路径规范化、发射类声明时剔除 `#private` 成员与 `static {}` 块、把 SVG / PNG / JPEG / WebP 资源导出与 JSON / YAML 一样排除在 API 模型之外；四个包都没有、也从未发布运行时不变式伴生插件，README 里相应的说明随 `remove-runtime-invariants` 一并删掉。网关侧新增了 `hasLiveClient()`，`api-remotes` 挂载的贡献多了产品分析与用户提问两个命名空间。**本章的设计叙述全部仍然成立。**
+
 ## 12.1 先问"为什么"：前后端类型安全的痛点
 
 浏览器要调宿主的业务方法（比如"给某个 agent 创建目标"）。朴素做法是手写 HTTP 接口 + 手写客户端类型——但这样会掉进三个坑：
@@ -76,7 +78,9 @@ export class GoalService extends TypertRemoteService {
 1. **分析**：`WorkspaceAnalyzer` 读取 TypeScript 程序，产出与编译器无关的 `FaceModel` / `TypeGraph` / `WorkspaceModel` 数据——**不保留任何 AST 节点**；
 2. **发射**：`FaceModelEmitter` 只读这份模型，产出可执行 JS（含 Zod 工厂）与 `.d.ts`；同一份模型还喂给 `CordisCatalogProjector`，生成 Cordis 目录文档。
 
-生成器有 `check` 与 `write` 两种模式：语法/语义错误、缺失公开注解、私有跨包引用都直接失败——**生成器同时是构建期的类型检查器**。运行时的 `dsh-typert-registry` 则**在首次使用时才物化 schema**，避免启动时为用不到的方法付出代价。
+生成器有 `check` 与 `write` 两种模式：语法/语义错误、缺失公开注解、私有跨包引用都直接失败——**生成器同时是构建期的类型检查器**。不过在根构建的 tsdown 阶段里，它以 `checkDiagnostics: false` 运行：TypeScript 诊断已由同一轮编排里的 `tsc -b`（以及 CI 的完整构建 / typecheck 任务）负责，生成器只做反射与发射，不重复诊断。运行时的 `dsh-typert-registry` 则**在首次使用时才物化 schema**，避免启动时为用不到的方法付出代价。
+
+模型只收录真正构成 API 的东西：发射的类声明只保留公开成员，`private` / `protected`、`#private` 成员以及 `static {}` 初始化块都被剔除（后两者是 0.2 补上的）；包导出里的 JSON、YAML、SVG、PNG、JPEG、WebP 等资源文件不产生 TypeScript 声明，被排除在 API 模型之外，而缺失的 JS / TS 导出源仍然是错误。
 
 ```mermaid
 flowchart LR
@@ -95,10 +99,10 @@ flowchart LR
 
 ## 12.5 构建流水线与产物
 
-根构建按顺序运行 `build:lib:host` → `build:lib:client` → `build:web`：
+根构建（`corepack pnpm run build`，即 `tsx scripts/build.ts`）依次运行 `build:native-system`、`build:lib`（= `build:lib:host` → `build:lib:client`）与 `build:web`：
 
-- **Host 阶段**：先 `tsc -b tsconfig.host.json`，再 `tsdown --env.DSH_BUILD_FACE host`。生成器在这一轮 tsdown 中运行，**以 Host 聚合为唯一的 `ts.Program` 种子**；
-- **Client 阶段**：`tsc -b tsconfig.client.json` 与 `tsdown --env.DSH_BUILD_FACE client`，消费刚生成的 Remote 客户端声明，**不再启动 Typert**。
+- **Host 阶段**：先 `tsc -b tsconfig.host.json`，再 `tsdown --config-loader native --env.DSH_BUILD_FACE host`，最后打包 Desktop 主进程（`pnpm --filter @deepseek-ai/dsh-desktop run bundle`）。生成器在这一轮 tsdown 中运行，**以 Host 聚合为唯一的 `ts.Program` 种子**；
+- **Client 阶段**：`tsc -b tsconfig.client.json` 与 `tsdown --config-loader native --env.DSH_BUILD_FACE client`，消费刚生成的 Remote 客户端声明，**不再启动 Typert**。
 
 旧版本书说生成器用 host/client 两个独立程序分析，这已不准确：Remote 生成只有 Host 一个种子。
 
@@ -145,7 +149,8 @@ sequenceDiagram
 - **每次调用都从当前注册表解析**描述符与存活服务，不缓存业务对象；缺提供者、未知身份、绑定不匹配、参数缺失或多余、schema 失败、方法不存在，都在进入或离开业务代码前失败；
 - **二进制结果**：`Uint8Array` 字段被网关投影为结果相对的字节附件，由 Connection 以 multipart 返回；客户端用生成的结果 codec 校验解码后的二进制结果；
 - **失败词汇**：统一为 `RemoteError<Code>`（带 `code` 与 `details`，结构标记 `isDSHRemoteError`）。网关自身的码都以 `gateway/` 开头，例如 `gateway/lookup-unavailable`、`gateway/input-invalid`、`gateway/method-unavailable`；业务或 lookup 抛出的已分类 `RemoteError`（如 `session/not-found`、`session/agent-busy`）原样上线，只有未分类的异常折叠为 `gateway/internal`；
-- **卸载**：卸载客户端贡献会移除描述符与方法、中止在途调用，外部持有的陈旧方法句柄后续调用直接拒绝；宿主上撤回的严格端点**不会降级为 SRC 推断**，防止热卸载悄悄削弱校验。
+- **卸载**：卸载客户端贡献会移除描述符与方法、中止在途调用，外部持有的陈旧方法句柄后续调用直接拒绝；宿主上撤回的严格端点**不会降级为 SRC 推断**，防止热卸载悄悄削弱校验；
+- **"有没有人在看"**：0.2 起宿主网关提供同步的 `ctx.typertGateway.hasLiveClient()`，只要还有一条未取消的 `$events` 流就返回 `true`（裸 WebSocket 不算，已取消但还在清理的流也不算）。它只是观察，不保证投递或客户端就绪——`cordis-host-runner` 在向浏览器发客户端 inspect 查询之前先问一句，没有已连接的页面就立即报错提示"打开或重连页面"，而不是空等超时。
 
 ### 设计思考：为什么把校验"只"放在宿主？
 
@@ -186,7 +191,7 @@ Typert 的定位很明确：**为 TS 全栈的复杂对象映射而生**。它�
 
 在 deepseek-harness 根目录的 Windows PowerShell 中执行。
 
-1. **找真实方法**：`rg -l "@Remote\(" packages -g "*.ts" -g "!*.spec.ts" -g "!*.test.ts"`，挑 3 个读它们的参数、lookup 与 `mode`。排除测试后，当前有二十余个源文件包含 `@Remote(`。
+1. **找真实方法**：`rg -l "@Remote\b" packages -g "*.ts" -g "!*.spec.ts" -g "!**/tests/**"`，挑 3 个读它们的参数、lookup 与 `mode`。当前约有三十个源文件（其中 `packages/extensions/tool-cordis/src/api-catalog.ts` 是生成的 API 目录文本，不算真实声明）；注意除了带名字的 `@Remote('create')`，也有不带参数的裸装饰器写法，例如实验包 `client-ui-cot-translation` 里的 `@Remote async translate(...)`。
 2. **读身份策略**：打开 `packages/api/session-controller` 的 README，找到"复用存活 Agent、冷恢复、去重、子 agent 栅栏"的描述。
 3. **感受构建期报错**：给某个 Remote 方法的参数加一个默认值（例如 `request: X = {}`），运行 `corepack pnpm run build:lib`，观察生成器拒绝；改回后再构建。
 4. **看产物**：构建后打开任一贡献包的 `lib/typert.remote-client.d.ts`，看生成的客户端签名；在编辑器里对 `ctx.remote.<ns>.<method>` 调用"跳转到定义"，确认借助 `.d.ts.map` 落到宿主源码。
@@ -208,12 +213,13 @@ Typert 的定位很明确：**为 TS 全栈的复杂对象映射而生**。它�
 2. lookup 把 `Agent` 映射成 `agentId`。如果方法需要传"一组 agent"呢？严格分析要求复杂对象有唯一的 `TypertLookupMap` 声明，这种"复杂对象过线"的问题，本质上是序列化的什么问题？
 3. 输入校验从"两端都做"改为"只在宿主做"。请列出这个决定的收益与代价；"未声明的属性先经过载体、到宿主才被剔除"会不会成为安全问题？调用方应该怎么防范？
 4. 生成器被重构为"分析 → 无 AST 的模型 → 发射"。如果要新增一种产物（比如为某个外部协议生成描述文件），在旧架构与新架构下分别要改哪些地方？
+5. 0.2 的生成器在发射类声明时剔除 `#private` 成员与 `static {}` 块，并把图片等资源导出排除在 API 模型之外。如果不剔除，会对"客户端只信构建产物"的确定性和公开 API 的边界造成什么影响？
 
 ## 小结
 
 - Typert = 编译期类型图 → RPC 契约（宿主 Zod codec + 客户端声明与贡献），契约不需要单独声明；
 - `@Remote` / `@RemoteScope` 声明，显式服务绑定（`TypertRemoteService` / `bindTypertRemote`），lookup 把宿主对象映射成线上 id，`mode: 'stream'` 支持双向 `RemoteStream`；
-- 生成器以 Host 聚合为唯一种子，经无 AST 的 `FaceModel` / `TypeGraph` 发射产物，兼做构建期类型检查；产物带声明映射，可从调用跳到实现；
+- 生成器以 Host 聚合为唯一种子，经无 AST 的 `FaceModel` / `TypeGraph` 发射产物，兼做构建期类型检查（根构建中诊断交给 `tsc -b`）；只收录公开成员与真正的代码导出；产物带声明映射，可从调用跳到实现；
 - 输入只在宿主校验，失败统一为 `RemoteError`，`gateway/*` 码与业务码原样上线；
 - 客户端只信构建产物；源码模式有 SRC 回退：开发时能跑，发布时严格。
 

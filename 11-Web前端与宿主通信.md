@@ -3,9 +3,11 @@
 > 到这里，我们一直在看宿主这一侧。这一章看另一半：浏览器里的 Web UI 怎么和宿主通信，Desktop 又是怎么"包"住它的。DSH 在这里有一个反直觉的设计——**前端本身也是插件**。理解它，你就理解了 DSH"一切皆插件"贯彻到底的决心。
 
 > **本章你将学到**：
-> - 概念：webServer / connection / clientModules / API Gateway、启动图 `__DSH_BOOT__`、双向远程流、Desktop 外壳
-> - 设计：为什么"前端也是插件"、为什么要浏览器令牌认证、为什么路由要"相对文档"
-> - 动手：用令牌换 Cookie、抓启动图与 combo bundle
+> - 概念：webServer / connection / clientModules / API Gateway、启动图 `__DSH_BOOT__`、双向远程流、`webStartup` 与对外发布参数、Desktop 外壳
+> - 设计：为什么"前端也是插件"、为什么要浏览器令牌认证、为什么路由要"相对文档"、为什么对外发布要"点名"而不是 `0.0.0.0`
+> - 动手：用令牌换 Cookie、抓启动图与 combo bundle、绑定具体地址与原生 HTTPS
+
+> **版本说明**：本章按 0.2.1-alpha.2 核对（上一版基准 0.1.7-rc.2）。"前端也是插件"、启动图、双向流这些骨架没有变；变化集中在"怎么把 Web 交给别人用"：监听地址从"回环或 0.0.0.0 二选一"改为**一个具体的本机地址**，Web 载体**原生支持 TLS**，新增 `--public-url` 声明对外地址，`webRuntime` 服务让位于 `webStartup`（升级指南 `web-listener-trust-config`，用户文档 `docs/user/guide/public-deployments.md`）。Desktop 一侧多了 Desktop 专属的产品分析、可安装的 `dsh` 命令和测试版更新登录开关（`desktop-test-auth-popup`）。
 
 > **先分清目录**：`apps/web` 是 Web 应用入口（包 `@deepseek-ai/dsh-web-frontend`，对 `@deepseek-ai/dsh-client-web` 外壳库做 Vite 构建，产物由 `dsh web` 提供）；前端插件散布在 `packages/client/*`；Desktop 是 `apps/desktop`（Electron）+ `apps/desktop-host`。而 `packages/web/*` **不是前端**——那是 Agent 的网页搜索/抓取工具（`tool-web`、`web-fetch-http`、`web-search-deepseek` 等）。
 
@@ -47,13 +49,14 @@ flowchart TB
 
 ## 11.3 webServer：极简 HTTP 载体——"我不懂业务"
 
-`packages/host/webserver`（`ctx.webServer`）是一个不关心业务概念的 `node:http` 服务：
+`packages/host/webserver`（`ctx.webServer`）是一个不关心业务概念的 `node:http` 服务（配置了 `tls` 时换成 `node:https`）：
 
 - **命名路由**：`register(route)`，`WebRouteKind` 为 `'exact' | 'prefix'`，重复注册抛错；匹配顺序是精确 → 最长前缀 → fallback；
 - **升级路由**：`registerUpgrade(route)`（`WebUpgradeRoute`），WebSocket 走这里；
 - **fallback**：`registerFallback(handler)`，由 `dsh-host-frontend-static` 认领，提供前端 dist；
 - **首页注入**：`tapIndex(transform)` 之外，还有结构化的注入表——渲染首页时发出 `webserver/index-inject` 事件，各插件往里贡献行，启动图就是这样进入 HTML 的；
-- **配置**：`host` 只能是 `'127.0.0.1' | '0.0.0.0'`，`port`，以及 gzip `compression`。Web bundle 的端口是 `ctx.webStartup.port ?? 3080`。
+- **配置**：`host` 是**一个具体的 IPv4 或 IPv6 本机接口地址**（字符串）；未指定地址的所有写法（`0.0.0.0`、`::`、`::ffff:0.0.0.0` 等）在加载时就被拒绝，导出的 `isWildcardHost` / `isLoopbackHost` 负责分类。`port` 为 0 时由系统分配。可选的 `tls: { certFile, keyFile }` 让它改用 HTTPS：两个 PEM 文件在绑定前读一次，读不到、为空、格式错或不匹配都直接让初始化失败，**绝不退回 HTTP**。另有 gzip `compression`。服务上的 `port` 读实际端口，新增的 `protocol` 报告 `http:` 或 `https:`；
+- **Web bundle 的取值**：`host: ctx.webStartup.host ?? '127.0.0.1'`、`port: ctx.webStartup.port ?? 3080`、`tls: ctx.webStartup.tls`——都来自解析命令行参数的 `web-startup` 行（11.4 节）。
 
 ### 设计思考：为什么 webServer 要"不懂业务"？
 
@@ -63,13 +66,13 @@ webServer 只做路由、升级、兜底、注入。它不知道"会话""工具"
 
 `packages/client/connection` 是前后端通信的门卫，它有两道检查，顺序固定：
 
-**第一道：Host/Origin 信任**（`src/api-request-trust.ts`）。请求的 `Host` 必须是回环地址或匹配 `trustedHosts`；带 `Origin` 时必须与 Host 一致，`sec-fetch-site: cross-site` 直接拒绝。失败返回 **403**。它防的是 DNS rebinding 与跨站请求，**但不建立身份**。
+**第一道：Host/Origin 信任**（`src/api-request-trust.ts`）。请求的 `Host` 必须满足三者之一：回环地址；**等于监听器自己绑定的 IP 字面量**（任意端口，0.2.1 新增）；或匹配 `trustedHosts` 的某一项（带端口精确匹配，不带端口匹配任意端口；默认端口按**监听器自己的协议**规范化，不看转发头）。带 `Origin` 时必须指向同一 authority，`sec-fetch-site: cross-site` 直接拒绝。失败返回 **403**。它防的是 DNS rebinding 与跨站请求，**但不建立身份**。
 
-**第二道：浏览器会话认证**（0.1.7 新增的核心变化）。每个 Host RPC 方法与 WebSocket 流都要求一个浏览器会话，没有"回环地址免认证"这一档：
+**第二道：浏览器会话认证**（0.1.7 引入）。每个 Host RPC 方法与 WebSocket 流都要求一个浏览器会话，没有"回环地址免认证"这一档：
 
 1. 每个进程生成一个随机**启动令牌**，`dsh web` 打印并打开形如 `http://127.0.0.1:3080/?token=...` 的地址；
 2. 只有 `GET /?token=` 能用令牌换取一个**签名 Cookie**，然后 303 重定向到干净的 `./`，令牌从地址栏消失；
-3. Cookie 与请求的 authority 绑定，`HttpOnly`、`SameSite=Strict`、不设 `Secure`，有效期 `cookieMaxAgeDays`（默认 30 天）；签名密钥是凭据层里的 grant 记录 `client-connection/browser-session`（第 9 章）；
+3. Cookie 与请求的 authority 绑定，host-only、`Path=/`、`HttpOnly`、`SameSite=Strict`，有效期 `cookieMaxAgeDays`（默认 30 天）；**当且仅当接收首页请求的监听器本身在跑 TLS 时**才带 `Secure`——由监听器协议决定，`publicUrl` 声明和转发头都影响不了。HTTPS 下 Cookie 名和签名受众还包含 `https:` 协议，HTTP 签发的 Cookie 换个名字也冒充不了 TLS 监听器。签名密钥是凭据层里的 grant 记录 `client-connection/browser-session`（第 9 章）；
 4. 没有或无效 Cookie 的首页与 RPC 请求返回 **401**；静态资源保持公开；不接受其他位置的查询令牌或 `Authorization` 头；目前没有登出。
 
 ```mermaid
@@ -88,11 +91,47 @@ sequenceDiagram
   C-->>B: 结果（无 Cookie 则 401）
 ```
 
-部署面也随之收紧：`dsh web` **拒绝 `--host 0.0.0.0`**，只能用默认的回环地址；`--trusted-host` 可以追加允许访问的主机。宿主侧，`ctx.connection.admit(request)` 返回操作者的 Peer，`connection.operator` 是对应的 PeerScope，`connection/request` waterfall 允许上游介入。
+宿主侧，`ctx.connection.admit(request)` 返回操作者的 Peer，`connection.operator` 是对应的 PeerScope，`connection/request` waterfall 允许上游介入。
+
+### 对外发布：具体地址、TLS 与反向代理
+
+0.1.7 的部署面只有一条路：回环地址 + `--trusted-host`，`--host 0.0.0.0` 被拒绝。0.2.1 没有放开通配地址，而是给了三把**各管一件事**的钥匙（`docs/cli-help.md` 的 `dsh web` 一节）：
+
+| 参数 | 管什么 | 不管什么 |
+|---|---|---|
+| `--host <IP>` | 绑定**一个**具体的本机接口地址（IPv4 或 IPv6）；该地址本身自动被围栏接受 | 不接受通配地址；DNS 名、其他接口、代理地址仍需 `--trusted-host` |
+| `--trusted-host <authority...>` | 追加围栏接受的 authority（可重复） | 只"放行"，不认证 |
+| `--tls-cert` / `--tls-key` | 监听器自己跑 HTTPS（成对出现，证书链 + 未加密私钥 PEM） | 不签发、不续期、不监视证书；换证书要重载或重启 |
+| `--public-url <url>` | 声明浏览器使用的对外根地址（可带挂载前缀），用于打印 / 打开的 URL、`DSH_WEB_URL` 和 web-surface 提示 | **不授予任何信任**，也不改路由 |
+
+```powershell
+# 反向代理剥掉 /ui/ 前缀后转发到本机监听器
+corepack pnpm dsh --profile web --public-url https://app.example/ui/ --trusted-host app.example
+# 直接在监听器上跑 HTTPS
+corepack pnpm dsh --profile web --tls-cert ./server-chain.pem --tls-key ./server-key.pem
+```
+
+非回环地址上跑明文 HTTP 时，`dsh web` 会在启动时打印警告——即使前面有一个 HTTPS 的 `--public-url`。放在反向代理后面时，代理要做五件事：**保留浏览器看到的 `Host`**、剥掉挂载前缀、转发 WebSocket 升级、改写 Cookie 作用域（把 `Path=/` 改成挂载路径，HTTPS 外段加 `Secure`）、把裸挂载点 `/ui` 重定向到 `/ui/`（只有 `/ui/` 能用启动令牌换 Cookie）。
+
+组合层面，`web-startup` 行（`@deepseek-ai/dsh-web-app/startup`）提供 `webStartup` 服务，承载这次调用解析出的 `openBrowser`、`host`、`port`、`tls`、`publicUrl`、`trustedHosts`；`webserver`、`web-runtime`、`connection` 三行都 `inject: [webStartup]`。0.1.7 的 `webRuntime` 服务（以及它在绑定 `0.0.0.0` 时采样的局域网地址 `lanAddresses`）已经不存在：
+
+```yaml
+# 自定义 overlay 迁移（节选，整行 config 需完整重写）
+- id: connection
+  inject: [webStartup]
+  config:
+    trustedHosts: !!js "['app.internal', ...ctx.webStartup.trustedHosts]"
+```
+
+还在 `inject: [webRuntime]` 的行会一直等一个永远不会挂载的服务，必需的 Connection 因而起不来；写了通配 `host` 的组合在加载时失败。
 
 ### 设计思考：只有信任围栏为什么不够？
 
 旧版只有"默认只信 loopback"的围栏。但回环地址并不等于"是你本人"：同一台机器上任何进程、任何能让浏览器发请求的网页（借助 DNS rebinding 等手法）都可能碰到 `127.0.0.1:3080`。围栏回答的是"请求从哪来"，令牌回答的是"请求是谁发的"——**可达性与身份是两件事**。每进程随机的启动令牌 + authority 绑定的 HttpOnly Cookie，让"能访问端口"不再等于"能驱动 Agent 读文件、跑命令"。
+
+### 设计思考：为什么不放开 `0.0.0.0`，而要"点名"？
+
+旧的 `0.0.0.0` 会把端口暴露给机器加入的**每一个**网络，bundle 还得在绑定时采样局域网地址塞进 `trustedHosts`——等于替操作者授予了他从没点过名的接口。0.2.1 的做法是"谁暴露、暴露哪个，都由操作者写出来"：`--host` 只绑一个地址，这个地址本身自然被接受（浏览器拨这个字面量时就把它当 `Host`，它也不是 rebinding 的目标），其余一律走 `--trusted-host`。TLS、对外地址、信任三件事也被刻意拆开：`--public-url` 只是"广告"，`Secure` 只看监听器自己的协议——**声明不等于事实，转发头不等于身份**。证书只向浏览器证明服务器是谁，不证明浏览器是谁，所以 TLS 也替代不了启动令牌。
 
 ## 11.5 clientModules：启动图 `__DSH_BOOT__`
 
@@ -126,7 +165,7 @@ sequenceDiagram
 
 ## 11.6 相对文档的路由：换个挂载点也能跑
 
-如果你在反向代理后面把 DSH 挂到 `https://example.com/dsh/`，代理剥掉前缀再转发，那么浏览器里任何写死 `/api/...` 的请求都会打到源站根而落空。0.1.7 的解法（2026-09-14 / 09-17 两份决策）：
+如果你在反向代理后面把 DSH 挂到 `https://example.com/dsh/`，代理剥掉前缀再转发，那么浏览器里任何写死 `/api/...` 的请求都会打到源站根而落空。0.1.7 的解法（2026-09-14 / 09-17 两份决策，后者在 0.2 已归档到 `.agents/notes/archived/`）至今未变，0.2.1 的 `--public-url` 正是建立在它之上——webserver 继续只回答源站根路由，从不知道挂载前缀：
 
 - 首页只有一个 `<base href="./">`，浏览器侧的引用一律写成相对形式 `api/x`、`plugins/x`；
 - 服务端注册键保持绝对；每个功能包在绝对键 `*_PATH` / `*_ENDPOINT` 旁派生浏览器形式 `*_ROUTE`（如 `SESSION_LOG_EXPORT_PATH` / `SESSION_LOG_EXPORT_ROUTE`、`FILE_UPLOAD_PATH` / `FILE_UPLOAD_ROUTE`），浏览器代码只用 `*_ROUTE`；
@@ -162,10 +201,16 @@ await ctx.remote.goals.create(agentId, { objective: '发布 v1' })
 
 - 私有 Desktop Host 用 CLI 共享的 profile runner 运行 Desktop profile，于是**完整的 Web 组合**（认证、路由、RPC）原样运行；Electron 只负责窗口、菜单、原生对话框、崩溃恢复与更新；
 - 页面通过 `file://` / `dsh-app://app/` 加载，不经 webServer 提供资源；
-- 保留 profile `.dsh/profiles/desktop`，CLI 拒绝使用这个名字；
+- 私有 Host 固定绑定 `127.0.0.1`（Electron 拨的就是这个地址），端口**默认由系统分配**——0.1.7 时是固定的 `19387`，现在不会再与 Web 的 `3080` 或其他保留端口冲突；WebSocket 按 Host 监听器的协议使用 `ws:` 或 `wss:`；
+- 保留 profile `$DSH_HOME/profiles/desktop`：npm 安装的 CLI 拒绝启动它、拒绝 dump 配置、也拒绝管理它的插件；0.2 起 Desktop 自带一个 `dsh` 命令（应用菜单 **Manage dsh Command…** 安装 / 修复 / 移除），在 Desktop **完全退出**后可以用 `dsh plugin --profile desktop add|list|remove` 管理这个 profile 的插件；
+- macOS / Linux 从图形界面启动时，Desktop 会在首个 Host 启动前以 `<登录 shell> -ilc` 读取一次登录 shell 环境，让 `~/.zprofile` 等启动文件里导出的变量对 Host、Agent shell 与终端生效（Windows 本就继承注册表里的环境，跳过这一步）；
 - Electron 以 `ELECTRON_RUN_AS_NODE=1` 加 `--expose-internals` 运行宿主与 pnpm，不另带 Node 二进制；
 - **Primary runtime**：Desktop 附带 Python、Node.js、pnpm 以及数据与 Office 相关库，安装到 Harness home，并写一份 `runtime.json` 清单；
-- 同一个发行号同时锁定 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-desktop-host`；更新客户端是强制的。
+- 同一个发行号同时锁定 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-desktop-host`；更新客户端是强制的。测试版的更新策略网关如需飞书登录，0.2.1 起**默认不弹任何认证窗口**：要在本机 `app.getPath('userData')/desktop/settings.json` 里把 `updates.allowTestAuthPopupWindow` 设为 `true` 并完全重启（升级指南 `desktop-test-auth-popup`；正式版的策略请求与产品账号登录不受影响）。
+
+### Desktop 专属：产品分析
+
+`@deepseek-ai/dsh-client-product-analytics` 是 0.2 新增的客户端包：**只有 Desktop** 挂载它和它依赖的 OTel 遥测导出器，普通 Web 两者都不挂载、从不上报这些事件。它由 `product-analytics` 设置命名空间里的 `enabled` 字段控制（默认 `true`，没有面向用户的开关）。事件类型与允许的字段由包内 `src/events.ts` 定义，公共字段只有 `device_id`、`user_id`、`os_version`、`app_version`，身份字段经 `deepseekAccount.getDeviceIdentity()` 以不含凭据的方式读取，缺失就省略；**API Key、账号令牌、提示词与回答永远不是事件字段**。上报走已认证的 Typert 远程方法，生成的校验器只接受类型化字段——和第 12 章"输入只在宿主校验"是同一条链路。
 
 ```mermaid
 flowchart LR
@@ -186,12 +231,15 @@ flowchart LR
 
 另写一套 Desktop 专用的 IPC，意味着认证、路由、RPC 要维护两份，并且永远在追赶 Web 的新功能。"Web 包装"让 Desktop 自动继承 Web 的一切，Electron 只做浏览器做不到的事（原生菜单、对话框、更新、恢复）。**差异最小化**，把平台特有的部分收窄到最薄的一层。
 
-## 11.9 两个新插件：侧栏浏览器与插件管理
+## 11.9 几个客户端插件样板
 
-两者都是"前端也是插件"的样板：
+它们都是"前端也是插件"的样板：
 
 - **侧栏浏览器** `@deepseek-ai/dsh-client-ui-sidebar-browser`（`packages/client/ui-sidebar-browser`）：右侧栏的 `browser` 标签页。在 Web 上是带 `sandbox` 属性的 iframe，在 Desktop 上是 `<webview>`；只接受 http/https 地址。
-- **插件管理页** `packages/client/ui-plugin-manager`：侧栏入口，后端服务是 `packages/boot/plugin-manager`，与 `dsh plugin` 命令共用。引导式安装先 `inspect`（对注册表名通过 `pnpm view` 查询），安装失败或取消时恢复 `package.json` 与 `pnpm-lock.yaml`；注册表按 `registry` → `fallbackRegistries`（默认含 npmmirror）依次尝试，私有注册表不会回落到公共注册表，失败时由 `failedAt` 指明卡在哪一步。
+- **插件管理页** `packages/client/ui-plugin-manager`：侧栏入口，后端服务是 `packages/boot/plugin-manager`，与 `dsh plugin` 命令共用。引导式安装先 `inspect`（对注册表名通过 `pnpm view` 查询），安装失败或取消时恢复 `package.json` 与 `pnpm-lock.yaml`；注册表按 `registry` → `fallbackRegistries`（默认含 npmmirror）依次尝试，私有注册表不会回落到公共注册表，失败时由 `failedAt` 指明卡在哪一步。0.2 里不少实验能力（持久终端、CoT 翻译等）就是以可选 bundle 的形式出现在这个页面的 **官方** 分组里，开关即增删一个 profile 层。
+- **会话日志上传开关** `@deepseek-ai/dsh-client-ui-settings-session-log`（0.2 新增）：在 **设置 → 通用** 版本号上方放一个开关，编辑宿主插件 `session-log-deepseek` 的 `enabled` 字段（第 9 章的 `dsh_session_log`）。它只在宿主暴露该设置时出现，只读客户端改不了；保存失败保留已接受的值并弹出 Toast。一个小插件 = 一个设置项，正是这一章想说明的粒度。
+
+**工具呈现模式的前端侧**：`@deepseek-ai/dsh-tools` 与 `@deepseek-ai/dsh-agent-tool-presentation` 的 `mode` 在 0.2.1 只接受 `native` 或 `ptc`，混合的 `both` 被拒绝（升级指南 `tool-presentation-mode`）。Web bundle 用 `DSH_TOOLS_MODE`（`native` | `ptc`）整体切换，按预设选择则改该预设里 `@deepseek-ai/dsh-agent-tool-presentation` 那一行；同一个应用里不同预设可以用不同模式。这是纯宿主侧的组合选择，前端没有对应的开关：`native` 下模型直接看到可见工具，`ptc` 下只看到 `run_code`，界面渲染的就是会话日志里实际发生的工具调用。
 
 ## 11.10 动手实验：令牌、启动图与 combo bundle
 
@@ -213,13 +261,18 @@ curl.exe -s -c dsh-cookie.txt -L "http://127.0.0.1:3080/?token=<token>" | Select
 
 3. **找 combo 地址**：在同一份 HTML 里找 `plugins/??` 开头的地址（注意它是相对路径），用 `curl.exe` 下载，确认静态资源不需要 Cookie；把 `rev=` 改掉再请求，确认得到 404。
 4. **看流**：浏览器 DevTools → Network → WS，找到 `remote.mux` 连接，观察 `$events` 流开头的 `ready` 帧。
-5. **看门禁**：阅读 `.agents/notes/implemented/architecture/2026-09-17-web-feature-routes-and-route-gate.md`，再在任一客户端插件源码里找一处 `*_ROUTE` 的用法。
+5. **看门禁**：阅读 `.agents/notes/archived/architecture/2026-09-17-web-feature-routes-and-route-gate.md`（0.2 归档），再在任一客户端插件源码里找一处 `*_ROUTE` 的用法。
+6. **通配地址被拒**：`corepack pnpm dsh --profile web --host 0.0.0.0 --no-open`，确认启动前就报错；再换成本机某个具体的局域网 IPv4（`Get-NetIPAddress -AddressFamily IPv4` 可查），确认能启动、终端出现明文 HTTP 警告，并且同一台机器上用这个 IP 访问能通过围栏（仍需令牌）。
+7. **（可选）原生 HTTPS**：用你已有的证书与私钥执行 `corepack pnpm dsh --profile web --tls-cert <链.pem> --tls-key <私钥.pem>`，换完 Cookie 后在 DevTools → Application → Cookies 里确认它带了 `Secure`；故意给一个不匹配的私钥，确认启动失败而不是退回 HTTP。
 
 ## 11.11 常见坑
 
 - **把启动令牌地址分享出去**：令牌在进程生命周期内有效，谁拿到都能换到 Cookie；
 - **浏览器代码里写 `/api/...`**：挂在子路径代理后会落空，门禁会拦；用 `*_ROUTE`；
-- **试图 `--host 0.0.0.0` 暴露给局域网**：`dsh web` 会拒绝；
+- **试图 `--host 0.0.0.0` 暴露给局域网**：所有通配写法都在加载时被拒绝；改为绑定一个具体地址，并为 DNS 名或代理地址加 `--trusted-host`；
+- **以为 `--public-url` 会放行该域名**：它只是"广告"，不授予信任；浏览器用的 authority 必须出现在 `--trusted-host` 里，否则所有 API 调用 403；
+- **在非回环地址上跑明文 HTTP**：启动令牌与会话 Cookie 都会明文过网；用 `--tls-cert` / `--tls-key` 或 HTTPS 反向代理，并把端口限制在可信网络；
+- **自定义 overlay 还在 `inject: [webRuntime]`**：该服务已不存在，改为 `webStartup`，并删掉对 `ctx.webRuntime.lanAddresses` 的引用；
 - **改动客户端包后没构建**：combo bundle 是构建产物，开发时用 `corepack pnpm run dev:web`；
 - **把敏感能力做成无校验的远程方法**：输入校验与权限判断都在宿主端（第 12 章的 Host-only 校验）；
 - **在 webServer 里直接塞业务逻辑**：业务走 connection / clientModules / Gateway 或你自己的插件；
@@ -228,17 +281,19 @@ curl.exe -s -c dsh-cookie.txt -L "http://127.0.0.1:3080/?token=<token>" | Select
 ## 11.12 思考题
 
 1. "前端也是插件"让 UI 可组合，代价是什么？（提示：加载顺序、共享模块表 `PLATFORM_MODULES`、启动期扫描、combo 请求的 URL 长度上限）
-2. 信任围栏回答"从哪来"，令牌 Cookie 回答"是谁"。如果要给团队在公网共享一个 DSH，现有机制还缺什么？（提示：登出、多用户、`Secure` Cookie、TLS 终止）
+2. 信任围栏回答"从哪来"，令牌 Cookie 回答"是谁"。0.2.1 已经有了具体地址绑定、原生 TLS 与带 `Secure` 的 Cookie，如果要给团队在公网共享一个 DSH，现有机制还缺什么？（提示：登出、多用户与权限、启动令牌的分发与轮换、端口本身的访问控制）
 3. 所有流复用一条 `remote.mux` WebSocket，而不是每条流一个连接。这样做得到了什么、又承担了什么风险？`streamInboxBytes` 在其中扮演什么角色？
 4. Desktop 选择"包装完整 Web"而不是"另写原生 IPC"。请举出一个 Web 做不到、必须由 Electron 负责的能力，并说明它为什么不适合放进 Web 组合。
+5. `--public-url` 被刻意设计成"只广告、不授信"，`Secure` 属性也只看监听器自己的协议、不看 `X-Forwarded-Proto`。如果反过来让它们从声明或转发头推导，攻击者能利用什么？代价又是什么（提示：HTTPS 代理 + HTTP 上游时 Cookie 要由谁改写）？
 
 ## 小结
 
 - 前端也是插件：`dsh.client` 声明 → 启动图 `__DSH_BOOT__`（bootstrap / application 批次）→ combo bundle `plugins/??…&rev=` → HMR；
-- webServer 是极简载体：register / registerUpgrade / registerFallback / 首页注入表；
+- webServer 是极简载体：register / registerUpgrade / registerFallback / 首页注入表；`host` 必须是一个具体地址，可选原生 TLS；
 - 通信：unary 走 `POST /api/<ns>/<method>`，流走 `/api/remote.mux` 多路复用（含 `$events`），支持双向 `RemoteStream<Out, In>`；
-- 安全：Host/Origin 围栏（403）+ 启动令牌换 authority 绑定 Cookie（401），`dsh web` 拒绝 0.0.0.0；
+- 安全：Host/Origin 围栏（403，接受回环、绑定 IP 与 `trustedHosts`）+ 启动令牌换 authority 绑定 Cookie（401，TLS 下带 `Secure`）；通配地址一律拒绝；
+- 对外发布：`--host` 点名接口、`--trusted-host` 放行 authority、`--tls-cert/--tls-key` 加密、`--public-url` 只做广告；组合层由 `webStartup` 服务传递这些参数；
 - 路由相对文档（`<base href="./">` + `*_ROUTE`）并由门禁维持；
-- Desktop = Electron 外壳 + 私有 Host 运行完整 Web 组合，附带 primary runtime；侧栏浏览器与插件管理页都是客户端插件。
+- Desktop = Electron 外壳 + 私有 Host（`127.0.0.1`、系统分配端口）运行完整 Web 组合，附带 primary runtime 与可安装的 `dsh` 命令；产品分析只在 Desktop；侧栏浏览器、插件管理页、会话日志开关都是客户端插件。
 
 下一章：Typert——一个 `@Remote` 装饰器，怎么同时产出宿主实现、客户端类型和校验？

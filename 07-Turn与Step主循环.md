@@ -6,6 +6,7 @@
 > - 概念：step 与 turn、完整时序、inbox 的两个边界与"先认领再决策"
 > - 设计：为什么主循环是插件；pre-step / request / llm-stream 三个 waterfall 与 turn-stopping 的"数据决定"
 > - 控制：显式的 turn 取消、followup / steer / inject 三种投递语义、后台任务完成如何唤醒 Agent
+> - 新变化（上一版基准 0.1.7-rc.2 → 0.2.1-alpha.2）：子 Agent 统一为"激活"、Agent Teams 直投 inbox、可超时的用户提问、失败 step 补写工具结果
 > - 动手：在真实会话日志里观察 step 边界与"模型自己决定多走一步"
 
 ## 7.1 先问"为什么"：循环是从哪来的？
@@ -49,7 +50,7 @@ sequenceDiagram
     U->>D: followup / steer（写入 inbox 并唤醒）
     D->>S: turn/start
     D->>D: 原子认领 next-step 全部 + 一条 next-turn
-    D->>P: agent/pre-step（waterfall：reject 或 enter）
+    D->>P: agent/pre-step（waterfall：reject 或 enter；兜底投影运行时上下文）
     alt 拒绝 / 首批为空 / pre-step 失败
         D->>S: turn/end（本轮不花 step）
     else 进入 step
@@ -79,8 +80,10 @@ sequenceDiagram
 - **先 `turn/start`，再认领，再 pre-step**。认领和它的那一次 pre-step 决策因此有了持久的 turn 归属。
 - `agent/request` 和 `prepareCall()` 都在 `step/start` 之后、系统提示词与用户消息**提交之前**运行；在这两个异步阶段取消，**两者都不会被提交**。
 - 请求在发出前被"从日志推导并冻结"——这正是第 6 章"Model-visible means logged"的落地。
+- **运行时上下文**（当前工作目录、文件策略等，第 6 章）在 pre-step 监听器之后由兜底逻辑投影；而且每次请求**准入**时还会再求值一次动态上下文 provider、对齐保留下来的运行时上下文（升级指南 `working-directory`）。所以 provider 要返回"此刻的状态"，不能假设每个 step 只被调用一次。
 - 模型请求失败时，`agent/request-error` 可以返回 `{ kind: 'retry' }`，在**同一个打开的 step 里**重试：不重复 pre-step，也不重复追加用户消息。压缩插件就用它处理"上下文溢出"（第 13 章）。
 - 实时逐字显示走进程内的 `agent/assistant-stream`（start / chunk / end 帧）；它是瞬时的，持久证据是 step 结束前写入的那条 `assistant/message` 里内嵌的完整流。
+- **失败的 step 也要"把账还清"**（笔记 `2026-09-19-failed-step-tool-results.md`）：助手消息已经请求了工具，调度却在结果写完之前失败——如果就这样关闭 step 和 turn，后续请求会因为"有调用没结果"被要求配对的 provider 拒绝，而已关闭的 error turn 又不会被崩溃修复逻辑处理。现在驱动器在关闭失败 step **之前**，按助手给出的调用顺序为每个未回答的调用补写错误结果：有 `tool/call` 记录但没结果的得到 `TOOL_OUTCOME_UNKNOWN`（文字提醒不要盲目重试可能有副作用的操作），连调用记录都没有的得到 `TOOL_NOT_STARTED`；已提交的结果原样保留，turn 仍以原来的失败结束。没有新事件类型，也没有格式变化。
 
 ### 三个 waterfall 闸门，和一个 serial 终点
 
@@ -90,7 +93,7 @@ sequenceDiagram
 | --- | --- | --- |
 | `agent/pre-step` | 返回 `{ kind: 'reject' }` 拒绝本步，或 `{ kind: 'enter', messages }` 决定**哪些消息进入本步**（可改写、可合并）；还可以声明 `startsRequestSeries` 开启新的请求系列 | —— |
 | `agent/request` | 替换冻结的调用配置 `LlmCallConfig`（切换模型、推理强度等） | **不能改消息**：模型可见的内容必须走日志通道 |
-| `llm/stream` | 包装流式输出（例如 `dsh-llm` 的 invariant 用它校验流） | —— |
+| `llm/stream` | 包装流式输出（例如 `dsh-session-checkpoint-policy` 用它在模型请求开始前先确保会话日志落盘（持久性检查点）；测试替身 `llm-replay` 在没注册适配器时用它直接回放录制的流） | —— |
 
 它们回答了同一个问题：**"模型看到什么、用什么配置看"应该由谁决定？** 答案不是"主循环写死"，而是"插件在明确的闸门处加工"——而且闸门的职责被刻意收窄了：只有 pre-step 能决定输入内容，request 只管配置。这样"模型看到的输入"只有一个入口，审计时不必在多个钩子之间猜。
 
@@ -149,11 +152,36 @@ agent.inject(createUserMessage({
 
 ### 相邻 Agent 之间也只用 steer
 
-父子 Agent 之间曾经有两套方向相反的控制：父用 `send_message` 走 FIFO followup，子用专门的 `report` 工具和系统提示段汇报。笔记 `2026-08-27-adjacent-agent-steer-messaging.md` 把它们统一成**一个**操作：`SubagentRuntime.sendMessage(sender, targetId, content, { signal })`，只允许在**相邻的一条边**上（父 ↔ 直接的可续子 Agent）发送，每条被接受的消息都走 `Agent.steer()`，模型可见内容统一加上 `Agent <sender-id> sent a message:` 的前缀。模型侧只剩一个方向中立的 `send_message` 工具（`@deepseek-ai/dsh-tool-subagent-control`）。一个附带好处是：子 Agent 不再有专属工具和提示段，分叉出来的子会话请求头与父会话一致，provider 的前缀缓存得以复用。
+父子 Agent 之间曾经有两套方向相反的控制：父用 `send_message` 走 FIFO followup，子用专门的 `report` 工具和系统提示段汇报。笔记 `2026-08-27-adjacent-agent-steer-messaging.md` 把它们统一成**一个**操作：`SubagentRuntime.sendMessage(sender, targetId, content, { signal })`，只允许在**相邻的一条边**上（父 ↔ 直接的可续子 Agent）发送，每条被接受的消息都走 `Agent.steer()`，模型可见内容统一加上 `Agent <sender-id> sent a message:` 的前缀。模型侧只剩一个方向中立的 `send_message` 工具（`@deepseek-ai/dsh-tool-subagent-control`，同包还有 `interrupt_agent`、`list_agents`）。一个附带好处是：子 Agent 不再有专属工具和提示段，分叉出来的子会话请求头与父会话一致，provider 的前缀缓存得以复用。
+
+### 子 Agent 统一为"激活"：委派从不阻塞父 step
+
+0.1.7-rc.2 时，委派子 Agent 有两种工具路径——前台等结果，或作为后台 Job 运行（`run_in_background`，用 `job_output` / `job_kill` 收取和停止）——外加一个独立发布的进程内驱动包 `subagent-in-process-driver`，本地一次性执行和可续驻留各自管理创建、取消、结果与清理。0.2.1-alpha.1 把它们收敛成一个入口（笔记 `2026-09-17-unified-subagent-activations.md`，升级指南 `subagent-activations`）：
+
+- `SubagentRuntime.startActivation(spec)` 是所有 provider 的唯一消费入口，返回的句柄暴露子 Agent 身份、结果 Promise 和"只销毁这一次激活"的 `dispose()`；启动时传入的 signal 只负责取消**尚未发布**的创建；
+- 面向模型的 `subagent` 工具（`@deepseek-ai/dsh-tool-subagent`）接受子 Agent 后**立刻**返回 `{ kind: 'activation', subagentId }`，这次工具调用立即结算，父 Agent 不必等子任务跑完；子 Agent 的最终答复以一条**入日志的完成通知**投递给父 Agent。`backgroundMode`、`enableRunInBackground` 和 `run_in_background` 参数全部删除，子 Agent 也不再出现在 `ctx.jobs` 里；
+- 需要在代码里同步拿结果的消费者（工作流）选择 `delivery: 'caller'`：等 `activation.result`、再 `dispose()`，此时**不**给父 Agent 发完成通知——结果已经由调用方消费，再唤醒父 Agent 只会重复上下文；
+- 本地的 Spawn / Fork provider 只通过 `prepareContinuable()` 贡献创建输入，Agent 的创建与驻留归子 Agent 服务所有，`subagent-in-process-driver` 包被删除；ACP、DSH SDK、Codex、Claude Code 这些外部 provider 仍是"执行一次"，加入同一套容量与所有权管理，但不接受后续消息。
+
+从主循环的角度看，这让委派变成了和后台任务一样的**事件驱动**：父 step 不被一个可能跑十分钟的子任务卡住，子任务结束时的通知像其它输入一样进入 inbox、被认领、进入下一次请求。
+
+### Agent Teams：消息直接进目标 inbox
+
+实验性的 Agent Teams（`@deepseek-ai/dsh-experimental-agent-team`）曾经维护一个独立的 Team 邮箱：消息先排队、再投递、再确认。笔记 `2026-09-26-team-direct-inbox.md` 认为这是和 Agent inbox 重复的第二套所有权，于是把新消息**直接**送进目标 Agent 的 inbox（经 Lead 的 steer 或宿主专用的子 Agent steer 适配器），发送者身份沿用已有的 `agent-message` 来源。模型侧的 `send_message` 现在只返回 `{ "sent": true }`——"已被 inbox 接受"既不代表模型处理过，也不代表同步落盘；失败的发送不会被保留重试，显式重发也不去重。配置键 `maxPendingMessagesPerMember` 被删除；历史的 `team/message/queued` / `team/message/delivered` 记录仍可读、可投影，但升级前没投递的排队消息**永远不会**再被派发（升级指南 `team-direct-inbox`）。
+
+### 可超时的用户提问：前台等待与迟到回答是两次结算
+
+`ask_user_question`（`@deepseek-ai/dsh-tool-ask-user`）默认仍是阻塞式：工具调用一直等到用户回答。笔记 `2026-09-19-timed-user-question-two-settlements.md` 让它可以**不阻塞**——配置 `mode: timed`（`timeout` 默认 120 秒，`-1` 表示退回阻塞），这一模式已经落地，但仓库自带的 preset 仍使用默认的 `legacy`：
+
+- 前台等待超时后，工具返回"待回答"（pending），模型可以继续做不依赖答案的工作；问题本身**不会**被丢弃；
+- 用户稍后回答时，`dsh-user-questions` 校验答案后通过 `agent.steer(createUserMessage(...))` 投递一条普通用户消息，`source` 为 `{ kind: 'user-question-reply', callId, outcome: 'answered' }`。inbox 里的这条消息就是"已排队的回答"，被接纳为 `user/message` 时问题才算结算；
+- 问题状态由 `userQuestions` 投影从已有事件重建（`request/header` 里的 `timeout` 参数识别计时模式、`tool/call` 打开问题、pending 结果使其"待续"、被接纳的回答使其结算）——**没有新事件类型，也没有等待状态日志**，只是在消息来源上多了一个种类（持久化记录 `2026-09-21-user-question-reply`）；关闭面板不会伪造一条回答。
+
+这正是本节"投递语义"的一个综合应用：迟到的回答用 steer（需要被下一步看到），而前台等待的倒计时、聚焦、草稿都是客户端本地状态，不进日志。
 
 ### 后台任务完成：默认每次都唤醒
 
-长任务通过 `ctx.jobs` 在后台运行（第 8 章、第 13 章）。任务完成时，`dsh-tool-jobs` 以 `completionDelivery` 默认的 `wakeup` 方式通知拥有它的 Agent：空闲就开一轮。曾经有一个默认值为 3 的 `maxConsecutiveWakes` 上限，结果连续串起四个后台任务的会话在第四个通知时"卡住"——通知被塞进一个没人会唤醒的 inbox，客户端又不显示它。笔记 `2026-09-22-unbounded-completion-wakes-by-default.md` 把上限改成**默认不设**、需要时显式配置，理由一句话：**看得见的成本胜过看不见的停滞**（多花的模型请求用户能看到、能停止；停在 inbox 里的通知谁也看不到）。
+长任务通过 `ctx.jobs` 在后台运行（第 8 章、第 13 章）。任务完成时，`dsh-tool-jobs` 以 `completionDelivery` 默认的 `wakeup` 方式通知拥有它的 Agent：空闲就开一轮。曾经有一个默认值为 3 的 `maxConsecutiveWakes` 上限，结果连续串起四个后台任务的会话在第四个通知时"卡住"——通知被塞进一个没人会唤醒的 inbox，客户端又不显示它。笔记 `2026-09-22-unbounded-completion-wakes-by-default.md` 把上限改成**默认不设**、需要时显式配置，理由一句话：**看得见的成本胜过看不见的停滞**（多花的模型请求用户能看到、能停止；停在 inbox 里的通知谁也看不到）。设置了 `maxConsecutiveWakes` 时，超出预算的通知降级为 inject，领取任何用户撰写的消息会恢复预算；`completionDelivery: quiet` 则让通知一律走注入通道。注意如今这里的"后台任务"只剩后台 bash/pwsh 命令和 PTY 发送——子 Agent 的完成走上面的激活通知，不再经过 `ctx.jobs`。
 
 ## 7.5 一轮怎么算结束：turn 是"推导"出来的，不是"人定"的
 
@@ -233,8 +261,10 @@ Get-Content snapshots/session/bash-tool-turn/session.v4.jsonl |
 回答：
 
 - 有几次 `step/start`？第一个 step 里 `assistant/message` 之后跟着什么？第二个 step 为什么没有 `tool/call`？
-- `turn/start` 之后、`step/start` 之前的那条 `agent/inbox/spliced` 是什么？（提示：7.4 节的"认领"）
-- `system/message` 和 `user/message` 出现在 `step/start` 之后还是之前？这和 7.3 节"`agent/request` 在提交系统提示词与用户消息之前运行"一致吗？
+- 日志里有两条 `agent/inbox/spliced`：`turn/start` **之前**那条带 `inserted`，`turn/start` 之后、`step/start` 之前那条带 `removedCount: 1`。它们分别对应什么？（提示：一条是 followup 入队，一条是 7.4 节的"认领"）
+- `system/message` 和 `user/message` 出现在 `step/start` 之后还是之前？这和 7.3 节"`agent/request` 在提交系统提示词与用户消息之前运行"一致吗？第二条 `user/message`（`source.kind` 为 `runtime-context`）又是谁写的？
+
+> 仓库的无 Key 测试还会用 `@deepseek-ai/dsh-llm-mock-server`（`packages/test-support/llm-mock-server`）按脚本模拟模型流。0.2.1-alpha.1 起它在每个结构化 SSE 帧旁边带上 Messages 事件名，原生 SDK 才能处理消息与内容块事件；只接受"无名 SSE 消息"的自定义消费者需要改为读取具名事件（升级指南 `mock-messages-events`）。脚本内容、顺序、请求捕获和分片数都不变。
 
 **有 Key 版本**：
 
@@ -252,7 +282,9 @@ corepack pnpm dsh --profile headless "用 ls 和 cat 了解一下当前目录，
 - **忘掉 waterfall 的 `next()`**：拦截了却不放行，下游的决策就丢了；包装 pre-step 时用 `{ ...decision, messages }` 保留下游声明的 `startsRequestSeries`；
 - **以为 pre-step 拒绝会把消息还回 inbox**：不会，认领是所有权转移；
 - **用 inject 去"叫醒"一个空闲的 Agent**：inject 不唤醒，需要唤醒请用 steer 或 followup；
-- **把取消当作可选项**：`exec.signal` 以及各事件 payload 里的 `signal` 是契约的一部分；不响应取消会让 `whenIdle()` 永远等下去，也别把某一轮的 signal 保存下来去控制另一轮。
+- **把取消当作可选项**：`exec.signal` 以及各事件 payload 里的 `signal` 是契约的一部分；不响应取消会让 `whenIdle()` 永远等下去，也别把某一轮的 signal 保存下来去控制另一轮；
+- **还在找子 Agent 的 `run_in_background` 或用 `job_output` 收子 Agent 结果**：已删除。委派工具返回 `subagentId`，结果走完成通知；代码里要同步拿结果，用 `startActivation({ ..., delivery: 'caller' })` 并记得 `dispose()`；
+- **把 Agent Teams 的 `{ sent: true }` 当成"对方已处理"**：它只表示目标 inbox 已接受。
 
 ## 7.12 思考题
 
@@ -261,12 +293,14 @@ corepack pnpm dsh --profile headless "用 ls 和 cat 了解一下当前目录，
 3. guard 插件"只提醒不强制"。如果换成"强制终止重复调用"，系统会得到什么、失去什么？（提示：想想模型需要重试的场景）
 4. `agent/turn-stopping` 用"数据决定"取代"监听器投票"。请设计一个"预算耗尽就停止"的插件：它应该挂在哪个扩展点、用什么数据表达"停"？（提示：比较 `concludesTurn`、`agent/pre-step` 的 reject 和 `agent.cancel()` 三者的语义差别）
 5. 后台任务完成通知从"默认最多唤醒 3 次"改成"默认不设上限"。你能想到哪种场景下默认上限反而更安全？如果你是部署方，会用什么信号决定是否配置 `maxConsecutiveWakes`？
+6. 可超时的用户提问把"前台等待"和"迟到回答"拆成两次结算，迟到回答用 `steer` 而不是 `inject` 投递。如果改用 `inject`，或者干脆让原来的工具调用一直挂着等回答，分别会出现什么问题？
 
 ## 小结
 
 - step = 一次请求 + 工具调用；turn = 零到多个 step，在认领输入前打开、在"什么都不欠"时关闭；
 - 主循环是插件（`dsh-agent-loop`）：`agent/pre-step` 决定输入、`agent/request` 只换配置、`llm/stream` 包装流；`agent/turn-stopping` 是 serial 终点，决策落在数据（steer / `concludesTurn`）上；
-- inbox 有 next-turn / next-step 两个边界，每步前原子认领一次；followup / steer 唤醒，inject 静默；父子 Agent 之间统一用 steer；
+- inbox 有 next-turn / next-step 两个边界，每步前原子认领一次；followup / steer 唤醒，inject 静默；父子 Agent 之间统一用 steer；子 Agent 委派统一为激活（立即返回、完成通知入日志），Agent Teams 直投 inbox，迟到的提问回答也是一条 steer；
+- 失败的 step 在关闭前补写 `TOOL_OUTCOME_UNKNOWN` / `TOOL_NOT_STARTED` 结果，保证工具调用与结果始终配对；
 - 取消是显式的：类型化原因、每轮一个信号、协作式执行，结果以 `aborted` 及其原因入日志；
 - 循环卫生靠 guard 插件：提醒不强制，决定权在模型；并行度由 `maxParallelToolCalls` 与执行模式共同决定。
 
