@@ -3,11 +3,11 @@
 > 到这里，我们一直在看宿主这一侧。这一章看另一半：浏览器里的 Web UI 怎么和宿主通信，Desktop 又是怎么"包"住它的。DSH 在这里有一个反直觉的设计——**前端本身也是插件**。理解它，你就理解了 DSH"一切皆插件"贯彻到底的决心。
 
 > **本章你将学到**：
-> - 概念：webServer / connection / clientModules / API Gateway、启动图 `__DSH_BOOT__`、双向远程流、`webStartup` 与对外发布参数、Desktop 外壳
-> - 设计：为什么"前端也是插件"、为什么要浏览器令牌认证、为什么路由要"相对文档"、为什么对外发布要"点名"而不是 `0.0.0.0`
+> - 概念：webServer / connection / clientModules / API Gateway、启动图 `__DSH_BOOT__`、按 Peer 的首页注入、双向远程流、`webStartup` 与对外发布参数、Desktop 外壳、文件拖放与凭据遮挡
+> - 设计：为什么"前端也是插件"、为什么要浏览器令牌认证、为什么路由要"相对文档"、为什么对外发布要"点名"而不是 `0.0.0.0`、为什么 index 注入要带 Peer
 > - 动手：用令牌换 Cookie、抓启动图与 combo bundle、绑定具体地址与原生 HTTPS
 
-> **版本说明**：本章按 0.2.1-alpha.2 核对（上一版基准 0.1.7-rc.2）。"前端也是插件"、启动图、双向流这些骨架没有变；变化集中在"怎么把 Web 交给别人用"：监听地址从"回环或 0.0.0.0 二选一"改为**一个具体的本机地址**，Web 载体**原生支持 TLS**，新增 `--public-url` 声明对外地址，`webRuntime` 服务让位于 `webStartup`（升级指南 `web-listener-trust-config`，用户文档 `docs/user/guide/public-deployments.md`）。Desktop 一侧多了 Desktop 专属的产品分析、可安装的 `dsh` 命令和测试版更新登录开关（`desktop-test-auth-popup`）。
+> **版本说明**：本章按 **0.2.1-rc.3**（源码 commit `22ddee3792`）核对；上一版书稿基准为 0.2.1-alpha.2。"前端也是插件"、启动图、双向流与对外发布（具体地址 / TLS / `--public-url` / `webStartup`）骨架未变。本轮前端相关增量：首页注入按 **Peer** 计算（升级指南 `webserver-index-peer`）；Web 默认挂上文件拖放（`ui-file-drag`）与凭据显示遮挡（`ui-secret-mask`）；可选的自定义插件索引 UI 见第 13 章。
 
 > **先分清目录**：`apps/web` 是 Web 应用入口（包 `@deepseek-ai/dsh-web-frontend`，对 `@deepseek-ai/dsh-client-web` 外壳库做 Vite 构建，产物由 `dsh web` 提供）；前端插件散布在 `packages/client/*`；Desktop 是 `apps/desktop`（Electron）+ `apps/desktop-host`。而 `packages/web/*` **不是前端**——那是 Agent 的网页搜索/抓取工具（`tool-web`、`web-fetch-http`、`web-search-deepseek` 等）。
 
@@ -54,8 +54,8 @@ flowchart TB
 - **命名路由**：`register(route)`，`WebRouteKind` 为 `'exact' | 'prefix'`，重复注册抛错；匹配顺序是精确 → 最长前缀 → fallback；
 - **升级路由**：`registerUpgrade(route)`（`WebUpgradeRoute`），WebSocket 走这里；
 - **fallback**：`registerFallback(handler)`，由 `dsh-host-frontend-static` 认领，提供前端 dist；
-- **首页注入**：`tapIndex(transform)` 之外，还有结构化的注入表——渲染首页时发出 `webserver/index-inject` 事件，各插件往里贡献行，启动图就是这样进入 HTML 的；
-- **配置**：`host` 是**一个具体的 IPv4 或 IPv6 本机接口地址**（字符串）；未指定地址的所有写法（`0.0.0.0`、`::`、`::ffff:0.0.0.0` 等）在加载时就被拒绝，导出的 `isWildcardHost` / `isLoopbackHost` 负责分类。`port` 为 0 时由系统分配。可选的 `tls: { certFile, keyFile }` 让它改用 HTTPS：两个 PEM 文件在绑定前读一次，读不到、为空、格式错或不匹配都直接让初始化失败，**绝不退回 HTTP**。另有 gzip `compression`。服务上的 `port` 读实际端口，新增的 `protocol` 报告 `http:` 或 `https:`；
+- **首页注入**：`tapIndex(transform)` 之外，还有结构化的注入表。`collectIndexInjections(peer)` / `renderIndex(html, peer)` **必须传入页面所代表的 Peer**（给 owner 浏览器页面时用 `ctx.connection.browserPeer`）；每次渲染发出一次 `webserver/index-inject` 事件，第二个参数就是同一个 Peer，订阅方往表里推当前行——启动图与 remote-access 快照因此属于该 Peer，而不是一律用 owner 快照（升级指南 `webserver-index-peer`）；
+- **配置**：`host` 是**一个具体的 IPv4 或 IPv6 本机接口地址**（字符串）；未指定地址的所有写法（`0.0.0.0`、`::`、`::ffff:0.0.0.0` 等）在加载时就被拒绝，导出的 `isWildcardHost` / `isLoopbackHost` 负责分类。`port` 为 0 时由系统分配。可选的 `tls: { certFile, keyFile }` 让它改用 HTTPS：两个 PEM 文件在绑定前读一次，读不到、为空、格式错或不匹配都直接让初始化失败，**绝不退回 HTTP**。另有 gzip `compression`。服务上的 `port` 读实际端口，`protocol` 报告 `http:` 或 `https:`；
 - **Web bundle 的取值**：`host: ctx.webStartup.host ?? '127.0.0.1'`、`port: ctx.webStartup.port ?? 3080`、`tls: ctx.webStartup.tls`——都来自解析命令行参数的 `web-startup` 行（11.4 节）。
 
 ### 设计思考：为什么 webServer 要"不懂业务"？
@@ -236,10 +236,12 @@ flowchart LR
 它们都是"前端也是插件"的样板：
 
 - **侧栏浏览器** `@deepseek-ai/dsh-client-ui-sidebar-browser`（`packages/client/ui-sidebar-browser`）：右侧栏的 `browser` 标签页。在 Web 上是带 `sandbox` 属性的 iframe，在 Desktop 上是 `<webview>`；只接受 http/https 地址。
-- **插件管理页** `packages/client/ui-plugin-manager`：侧栏入口，后端服务是 `packages/boot/plugin-manager`，与 `dsh plugin` 命令共用。引导式安装先 `inspect`（对注册表名通过 `pnpm view` 查询），安装失败或取消时恢复 `package.json` 与 `pnpm-lock.yaml`；注册表按 `registry` → `fallbackRegistries`（默认含 npmmirror）依次尝试，私有注册表不会回落到公共注册表，失败时由 `failedAt` 指明卡在哪一步。0.2 里不少实验能力（持久终端、CoT 翻译等）就是以可选 bundle 的形式出现在这个页面的 **官方** 分组里，开关即增删一个 profile 层。
-- **会话日志上传开关** `@deepseek-ai/dsh-client-ui-settings-session-log`（0.2 新增）：在 **设置 → 通用** 版本号上方放一个开关，编辑宿主插件 `session-log-deepseek` 的 `enabled` 字段（第 9 章的 `dsh_session_log`）。它只在宿主暴露该设置时出现，只读客户端改不了；保存失败保留已接受的值并弹出 Toast。一个小插件 = 一个设置项，正是这一章想说明的粒度。
+- **插件管理页** `packages/client/ui-plugin-manager`：侧栏入口，后端服务是 `packages/boot/plugin-manager`，与 `dsh plugin` 命令共用。引导式安装先 `inspect`（对注册表名通过 `pnpm view` 查询），安装失败或取消时恢复 `package.json` 与 `pnpm-lock.yaml`；注册表按 `registry` → `fallbackRegistries`（默认含 npmmirror）依次尝试，私有注册表不会回落到公共注册表，失败时由 `failedAt` 指明卡在哪一步。不少实验能力（CoT 翻译、自定义插件索引等）以可选 bundle 出现在这个页面的 **官方** 分组里，开关即增删一个 profile 层；**持久终端**组合包仍在 `OPTIONAL_BUNDLES` 里，但插件页不再展示开关——改走 profile 的 `dsh.profile.bundles`（升级指南 `persistent-terminal-controls`，第 13 章）。
+- **会话日志上传开关** `@deepseek-ai/dsh-client-ui-settings-session-log`：在 **设置 → 通用** 版本号上方放一个开关，编辑宿主插件 `session-log-deepseek` 的 `enabled` 字段（第 9 章的 `dsh_session_log`）。它只在宿主暴露该设置时出现，只读客户端改不了；保存失败保留已接受的值并弹出 Toast。一个小插件 = 一个设置项，正是这一章想说明的粒度。
+- **文件拖放** `@deepseek-ai/dsh-client-ui-file-drag`（`packages/client/ui-file-drag`，共享命名与原生传输在 `packages/util/file-drag`）：Web / Desktop 默认组合挂载。消费方注入 `fileDrag`，把 `ctx.fileDrag.actions` 传给图片 Factory / Markdown 图片委托 / `ChatViewInjected`（升级指南 `file-drag-callbacks`）。`prepare` 准备 Blob 或 URL 内容与可选 Session 资源地址；应用内令牌 `application/x-dsh-file` 只在本实例的输入框范围解析；失败提示走插件词典，源面板关掉后仍可见。Desktop 可经授权借用源文件做原生拖出。
+- **凭据显示遮挡** `@deepseek-ai/dsh-client-ui-secret-mask`（`packages/client/ui-secret-mask`）：Web 默认组合挂载。已发送用户文本里可识别的 API 密钥、令牌、JWT、私钥块、URL 密码等做**显示遮挡**（多数格式保留前八字符，其余为 `*`）；原文、复制与模型输入不变。交互消息每段末尾有眼睛控件，可单值显隐。
 
-**工具呈现模式的前端侧**：`@deepseek-ai/dsh-tools` 与 `@deepseek-ai/dsh-agent-tool-presentation` 的 `mode` 在 0.2.1 只接受 `native` 或 `ptc`，混合的 `both` 被拒绝（升级指南 `tool-presentation-mode`）。Web bundle 用 `DSH_TOOLS_MODE`（`native` | `ptc`）整体切换，按预设选择则改该预设里 `@deepseek-ai/dsh-agent-tool-presentation` 那一行；同一个应用里不同预设可以用不同模式。这是纯宿主侧的组合选择，前端没有对应的开关：`native` 下模型直接看到可见工具，`ptc` 下只看到 `run_code`，界面渲染的就是会话日志里实际发生的工具调用。
+**工具呈现模式的前端侧**：`@deepseek-ai/dsh-tools` 与 `@deepseek-ai/dsh-agent-tool-presentation` 的 `mode` 只接受 `native` 或 `ptc`，混合的 `both` 被拒绝（升级指南 `tool-presentation-mode`）。Web bundle 用 `DSH_TOOLS_MODE`（`native` | `ptc`）整体切换，按预设选择则改该预设里 `@deepseek-ai/dsh-agent-tool-presentation` 那一行；同一个应用里不同预设可以用不同模式。这是纯宿主侧的组合选择，前端没有对应的开关：`native` 下模型直接看到可见工具，`ptc` 下只看到 `run_code`，界面渲染的就是会话日志里实际发生的工具调用。
 
 ## 11.10 动手实验：令牌、启动图与 combo bundle
 
@@ -285,15 +287,17 @@ curl.exe -s -c dsh-cookie.txt -L "http://127.0.0.1:3080/?token=<token>" | Select
 3. 所有流复用一条 `remote.mux` WebSocket，而不是每条流一个连接。这样做得到了什么、又承担了什么风险？`streamInboxBytes` 在其中扮演什么角色？
 4. Desktop 选择"包装完整 Web"而不是"另写原生 IPC"。请举出一个 Web 做不到、必须由 Electron 负责的能力，并说明它为什么不适合放进 Web 组合。
 5. `--public-url` 被刻意设计成"只广告、不授信"，`Secure` 属性也只看监听器自己的协议、不看 `X-Forwarded-Proto`。如果反过来让它们从声明或转发头推导，攻击者能利用什么？代价又是什么（提示：HTTPS 代理 + HTTP 上游时 Cookie 要由谁改写）？
+6. `renderIndex(html, peer)` 为什么要把 Peer 传进首页注入？如果一律用 owner 快照，非 owner 页面会出什么问题？（提示：remote-access 快照、第 12 章的资源访问）
+7. `ui-secret-mask` 只改显示、不改原文与模型输入。它防的是哪一类泄露？防不了哪一类？（提示：屏幕共享 / 截图 vs 复制、日志、模型上下文）
 
 ## 小结
 
 - 前端也是插件：`dsh.client` 声明 → 启动图 `__DSH_BOOT__`（bootstrap / application 批次）→ combo bundle `plugins/??…&rev=` → HMR；
-- webServer 是极简载体：register / registerUpgrade / registerFallback / 首页注入表；`host` 必须是一个具体地址，可选原生 TLS；
+- webServer 是极简载体：register / registerUpgrade / registerFallback / 按 Peer 计算的首页注入表；`host` 必须是一个具体地址，可选原生 TLS；
 - 通信：unary 走 `POST /api/<ns>/<method>`，流走 `/api/remote.mux` 多路复用（含 `$events`），支持双向 `RemoteStream<Out, In>`；
 - 安全：Host/Origin 围栏（403，接受回环、绑定 IP 与 `trustedHosts`）+ 启动令牌换 authority 绑定 Cookie（401，TLS 下带 `Secure`）；通配地址一律拒绝；
 - 对外发布：`--host` 点名接口、`--trusted-host` 放行 authority、`--tls-cert/--tls-key` 加密、`--public-url` 只做广告；组合层由 `webStartup` 服务传递这些参数；
 - 路由相对文档（`<base href="./">` + `*_ROUTE`）并由门禁维持；
-- Desktop = Electron 外壳 + 私有 Host（`127.0.0.1`、系统分配端口）运行完整 Web 组合，附带 primary runtime 与可安装的 `dsh` 命令；产品分析只在 Desktop；侧栏浏览器、插件管理页、会话日志开关都是客户端插件。
+- Desktop = Electron 外壳 + 私有 Host（`127.0.0.1`、系统分配端口）运行完整 Web 组合，附带 primary runtime 与可安装的 `dsh` 命令；产品分析只在 Desktop；侧栏浏览器、插件管理页、会话日志开关、文件拖放与凭据遮挡都是客户端插件。
 
 下一章：Typert——一个 `@Remote` 装饰器，怎么同时产出宿主实现、客户端类型和校验？

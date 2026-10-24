@@ -1,8 +1,8 @@
 # 附录 C 参考资料
 
-本附录列出的路径都相对于 DSH 仓库根目录，已按 HEAD（0.2.1-alpha.2）逐条用 `git ls-files` 核实存在。官方文档大多有中文版：把 `xxx.md` 换成 `xxx.zh.md` 即可；每对译文旁还有一个 `xxx.i18n.yaml`，记录两种语言按章节对齐的配对指纹，由 `verify-translation-pairing` 检查（`docs/` 下除 `docs/AGENTS.md`、`docs/i18n/` 的几份翻译工作文件和 `docs/cordis-api/inherited.md` 外都成对存在；设计笔记和升级指南也有 `.zh.md`）。
+本附录列出的路径都相对于 DSH 仓库根目录，已按 HEAD（`0.2.1-rc.3`，commit `22ddee3792`）用 `git ls-files` / 目录列举核实存在。官方文档大多有中文版：把 `xxx.md` 换成 `xxx.zh.md` 即可；每对译文旁还有一个 `xxx.i18n.yaml`，记录两种语言按章节对齐的配对指纹，由 `verify-translation-pairing` 检查（`docs/` 下除 `docs/AGENTS.md`、`docs/i18n/` 的几份翻译工作文件和 `docs/cordis-api/inherited.md` 外都成对存在；设计笔记和升级指南也有 `.zh.md`）。
 
-> 相对上一版（0.1.7-rc.2）的路径变化：`docs/subsystems/invariants.md` 已删除（运行时不变式在 0.2.1-alpha.1 移除）；`apps/cli/config/examples/github-review/` 已删除，示例随 `webhook-github` 适配器发布；不少设计笔记从 `.agents/notes/implemented/` 归档到了 `.agents/notes/archived/`，下文都已改成当前位置。
+> 相对书稿上一基准（0.2.1-alpha.2）的路径变化：组合包列表迁到 `packages/util/official-bundles/`；新增工具执行器 `packages/core/tool-executor-native` / `tool-executor-ptc`、插件市场与 CUA 等实验包；升级指南新增 `v0.2.1-alpha.3` … `v0.2.1-rc.3` 整批。更早相对 0.1.7-rc.2：`docs/subsystems/invariants.md` 已删除；`apps/cli/config/examples/github-review/` 已删除，示例随 `webhook-github` 适配器发布。
 
 ## 仓库入口
 
@@ -16,11 +16,17 @@
 
 ## 升级指南（docs/upgrade-guide/）
 
-破坏性变更的官方迁移说明，是从旧版本升级时最该先读的一类文档。路径形如 `docs/upgrade-guide/<版本>/<主题>/guide.md`，**按"从哪个版本升级"归档**：指南在引入破坏的同一个 PR 里写，放在当时根版本的目录下，版本一升旧目录即冻结。所以 `v0.2.0-rc.2/` 下的指南描述的是 0.2.1-alpha.1 才落地的变更，`v0.2.1-alpha.1/` 下的描述 0.2.1-alpha.2 的变更。写作规则见 `.agents/skills/dsh-create-upgrade-guide/SKILL.md`，校验脚本是 `verify-upgrade-guides`（第 14 章）。
+破坏性变更的官方迁移说明，是从旧版本升级时最该先读的一类文档。路径形如 `docs/upgrade-guide/<版本>/<主题>/guide.md`（成对 `guide.zh.md`），**按"从哪个版本升级"归档**：指南在引入破坏的同一个 PR 里写，放在当时根版本的目录下，版本一升旧目录即冻结。所以 `v0.2.0-rc.2/` 下的指南描述的是 0.2.1-alpha.1 才落地的变更，`v0.2.1-rc.2/` 下的描述随后进 rc.3 的变更。写作规则见 `.agents/skills/dsh-create-upgrade-guide/SKILL.md`，校验脚本是 `verify-upgrade-guides`（第 14 章）。
 
 - `v0.1.7-rc.2/`：`schedule-optional-bundle`、`transcript-view-legacy-normal`
 - `v0.2.0-rc.2/`：`account-sign-in-errors`（登录错误码 `no-response`）、`bundled-python-tests`、`remove-runtime-invariants`、`schedule-bundle-retired`、`subpath-plugin-display-manifest`
-- `v0.2.1-alpha.1/`：`deepseek-model-discovery`（无 Key 时模型目录为空）、`desktop-test-auth-popup`、`experimental-package-composition`（实验包的显式安装与组合）、`instruction-home-override`、`mock-messages-events`、`native-subagent-bundle-tools`、`new-session-generations`、`plugin-option-placement`（`dsh plugin --profile` 位置）、`python-optional-resources`、`python-ptc-sandbox`、`session-title-adapters`、`session-title-provider-strategy`、`ssh-helper-launch`、`subagent-activations`、`team-direct-inbox`、`terminal-command-labels`、`tool-presentation-mode`、`web-listener-trust-config`（`webStartup` 与具体监听地址）、`working-directory`
+- `v0.2.1-alpha.1/`：`deepseek-model-discovery`、`desktop-test-auth-popup`、`experimental-package-composition`、`instruction-home-override`、`mock-messages-events`、`native-subagent-bundle-tools`、`new-session-generations`、`plugin-option-placement`、`python-optional-resources`、`python-ptc-sandbox`、`session-title-adapters`、`session-title-provider-strategy`、`ssh-helper-launch`、`subagent-activations`、`team-direct-inbox`、`terminal-command-labels`、`tool-presentation-mode`、`web-listener-trust-config`、`working-directory`
+- `v0.2.1-alpha.2/`：`cordis-timer-wrappers`、`deepseek-account-identity-watch`、`deepseek-account-model-catalog`、`desktop-font-size-shortcuts`、`from-default-profile-replaces-target`、`operator-connect`、`pi-ai-azure-provider`、`pi-ai-model-discovery`、`plugin-install-over-installed`、`plugin-manager-view-fields`、`sdk-minimal-image-compaction`、`stored-credentials-precedence`
+- `v0.2.1-alpha.3/`：`plugin-engines-dsh`（插件兼容性优先读 `engines.dsh`）
+- `v0.2.1-alpha.4/`：`account-notification-fields`、`model-switch-compaction`、`session-model-selection`
+- `v0.2.1-rc.1/`：`agent-instructions-chain-budgets`、`subagent-control-tools`
+- `v0.2.1-rc.2/`（大批量）：`node-24`、`official-bundle-lists`、`tool-executor-plugins`、`conditional-tools`、`session-projection-handles`、`session-store-writes`、`persistent-terminal-controls`、`pi-ai-model-catalog` / `pi-ai-default-capacities` / `pi-ai-protocol-replay`、`web-fetch-private-destinations`、`webserver-index-peer`、`headless-policy-composition`、`new-session-blank-reuse`、`sdk-desktop-context`、`sdk-minimal-checkpoints`、`approval-projection-dependency`、`auto-review-shutdown` / `auto-review-user-sources`、`cua-preset-scope` / `cua-relative-coordinates`、`built-in-japanese`、`file-drag-callbacks`
+- `v0.2.1-rc.3/`：`independent-session-forks`（普通 fork 成为独立 Session，不再写 `parentSession`）
 
 ## 架构与核心文档（docs/）
 
@@ -37,7 +43,7 @@
 - 工具目录：`docs/tool-catalog.md`
 - 术语表：`docs/glossary.md`
 - 模型请求扩展线路格式：`docs/deepseek-llm-api-wire-extensions.md`
-- 开发与测试：`docs/development.md`、`docs/testing.md`、`docs/defensive-patterns.md`
+- 开发与测试：`docs/development.md`、`docs/testing.md`、`docs/defensive-patterns/`（入口 `README.md`）
 - 模块图与图谱：`docs/module-graph.md`、`docs/graph-atlas.md`
 - vendored 包改名映射（`@deepseek-ai` 作用域）：`docs/rescope.md`
 - 事故复盘：`docs/postmortem/README.md`（如 `docs/postmortem/0004-landlock-partial-notice-misclassified-child-failures.md`）
@@ -77,7 +83,15 @@
 - 进阶能力（第 13 章）：`subagent.md`、`skills.md`、`workflow.md`、`plan.md`、`goal.md`、`schedule.md`、`deliverables.md`、`office-to-pdf.md`、`browser-use.md`、`computer-use.md`、`agent-team.md`、`voice-input.md`、`webhook.md`、`claude-code-mods.md`、`translation.md`、`workspace.md`、`scope.md`、`attachment.md`、`feedback.md`
 - 可观测（第 13、14 章）：`otel.md`（`ctx.otel` 通道工厂）、`product-telemetry.md`、`session-telemetry.md`
 
-> 0.2.x 的增减：新增 `otel.md`、`translation.md`、`working-directory.md`、`worktrees.md`、`claude-code-mods.md`；删除 `invariants.md`。旧版书稿"更多"清单里的 `telemetry` 早已拆成 `session-telemetry.md` 与 `product-telemetry.md`。
+> 0.2.x 的增减：新增 `otel.md`、`translation.md`、`working-directory.md`、`worktrees.md`、`claude-code-mods.md`；删除 `invariants.md`。旧版书稿"更多"清单里的 `telemetry` 早已拆成 `session-telemetry.md` 与 `product-telemetry.md`。CUA / 插件市场 / tool-executor 等较新能力以包内 `README.zh.md` 与对应升级指南为主，subsystem 索引未全部单列时以包 README 为准。
+
+## 关键包 README（与 0.2.1-rc 新能力）
+
+- 官方组合包列表：`packages/util/official-bundles/README.md`（中文 `README.zh.md`）
+- 工具执行器：`packages/core/tool-executor-native/README.md`、`packages/core/tool-executor-ptc/README.md`
+- 插件市场：`packages/boot/plugin-market/README.md`、`packages/client/ui-plugin-market/README.md`、`packages/experimental/plugin-market-bundle/`；索引生成 app：`apps/plugin-market-generator/`
+- CUA：`packages/experimental/cua/README.zh.md`、`cua-macos/README.zh.md`、`cua-bundle/`
+- HTTP 抓取：与 `web_fetch` 私有目标相关的升级指南见上节 `web-fetch-private-destinations`；实现包 `@deepseek-ai/dsh-web-fetch-http`
 
 ## 示例与可运行素材
 
@@ -87,16 +101,17 @@
 - `apps/cli/config/examples/mcp-memory/`：三种 MCP 记忆服务器的组合示例（配合 `docs/user/guide/mcp-memory.md`）
 - `python/sdk/examples/minimal.py`（说明见 `python/sdk/examples/README.md`）：Python SDK 最小程序
 - `packages/bundle/*/cordis.patch.yml`、`packages/bundle/web-app/presets/*.patch.yml`：内置组合包与 Web preset 的真实装配
-- `packages/experimental/*/cordis.patch.yml`：11 个随附可选 bundle 的装配（例如 `packages/experimental/session-search/cordis.patch.yml` 用隔离分组挂载自己的内存索引）
+- `packages/experimental/*/cordis.patch.yml`：随附可选 bundle 的装配（HEAD 的 `OPTIONAL_BUNDLES` 共 14 项，含 `cua-bundle`、`plugin-market-bundle`、`personalized-recommendations` 等；例如 `packages/experimental/session-search/cordis.patch.yml` 用隔离分组挂载自己的内存索引）
+- `packages/bundle/*/cordis.patch.yml` 中与 tool-executor 相关的挂载行：对照升级指南 `tool-executor-plugins` 理解原生 / PTC 执行器如何进入 base
 - `snapshots/`：keyless 快照场景（`snapshots/session`、`sdk`、`acp`、`web`，说明见 `snapshots/AGENTS.md`）
-- `benchmarks/`：仓库级性能门（说明见 `benchmarks/AGENTS.md` 与各场景 `README.md`，附录 F）
+- `benchmarks/`：仓库级性能门（说明见 `benchmarks/AGENTS.md` 与各场景 `README.md`，附录 F；CI 要求 Node >= 24.9）
 
 ## 设计笔记（.agents/notes/）
 
 设计笔记是理解"为什么这样做"的一手资料，按状态分为 `implemented/`、`proposed/`、`archived/`、`rejected/`，每个目录下再按 `architecture/`、`feature/`、`bug-fix/`、`simplification/`、`testing/`、`process/` 分类。笔记开头的 `Status:` 行标明状态；`archived/` 里的笔记多数仍是 `Status: implemented`，只是被归档（带 `Archived:` 日期）——**归档不等于作废**，读的时候以正文为准。下面按章节列出本书引用最多的笔记，路径相对 `.agents/notes/`：
 
 - 配置与 profile（第 4 章）：`implemented/architecture/2026-09-09-profile-resolution-generations.md`、`implemented/architecture/2026-09-19-profile-resolution-lookup-order.md`、`implemented/architecture/2026-09-19-profile-owned-live-configuration.md`、`implemented/architecture/2026-09-30-profile-package-refresh-and-manifest-invalidation.md`、`implemented/architecture/2026-09-18-declarative-agent-presets.md`、`implemented/architecture/2026-09-21-experimental-capabilities-as-optional-bundles.md`、`implemented/process/2026-09-15-shipped-optional-bundles.md`、`implemented/architecture/2026-10-05-official-on-demand-bundles.md`、`implemented/feature/2026-09-20-config-schema-dump-validation-policy.md`
-- 会话（第 6 章）：`implemented/architecture/2026-09-06-v3-canonical-session-envelopes.md`、`implemented/architecture/2026-09-15-first-class-tool-role-messages.md`、`implemented/architecture/2026-09-17-native-v4-read-validation.md`、`implemented/architecture/2026-09-13-session-working-directory.md`、`implemented/process/2026-10-08-session-reader-compatibility-review.md`
+- 会话（第 6 章）：`implemented/architecture/2026-09-06-v3-canonical-session-envelopes.md`、`implemented/architecture/2026-09-15-first-class-tool-role-messages.md`、`implemented/architecture/2026-09-17-native-v4-read-validation.md`、`implemented/architecture/2026-09-13-session-working-directory.md`、`implemented/process/2026-10-08-session-reader-compatibility-review.md`、`implemented/architecture/2026-10-23-independent-session-forks.md`（及 `.zh.md`）
 - 主循环与委派（第 7、13 章）：`implemented/simplification/2026-09-17-unified-subagent-activations.md`、`implemented/simplification/2026-09-26-team-direct-inbox.md`
 - 工具（第 8 章）：`implemented/architecture/2026-09-03-jobs-seam-consolidation.md`、`archived/architecture/2026-09-12-ptc-runtime-vocabulary.md`、`implemented/architecture/2026-09-20-dynamic-tool-updates.md`、`implemented/architecture/2026-09-22-tool-call-three-phases.md`、`implemented/architecture/2026-09-24-preparing-tool-arguments.md`、`implemented/simplification/2026-10-05-native-or-ptc-presentation.md`、`implemented/feature/2026-09-13-explicit-worktree-creation.md`、`archived/feature/2026-09-12-mcp-resources-and-instructions.md`
 - 远程执行（第 8、10、13 章）：`implemented/simplification/2026-09-11-remove-e2b-providers.md`、`implemented/architecture/2026-09-11-posix-ssh-runtime.md`

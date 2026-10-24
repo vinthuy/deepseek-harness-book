@@ -2,11 +2,13 @@
 
 > 第 6 章我们知道了会话是一条事件日志。这一章讲**是谁在往日志里写事件**——那个驱动模型思考、调用工具、再思考的循环。它是 Agent 的灵魂，也是 DSH 里被插件化得最彻底的东西。
 
+> 本章基于 DSH **0.2.1-rc.3**（源码 commit `22ddee3792`）。
+>
 > **本章你将学到**：
 > - 概念：step 与 turn、完整时序、inbox 的两个边界与"先认领再决策"
-> - 设计：为什么主循环是插件；pre-step / request / llm-stream 三个 waterfall 与 turn-stopping 的"数据决定"
+> - 设计：为什么主循环是插件；条件工具的 step admission、pre-step / request / llm-stream 闸门与 turn-stopping 的"数据决定"
 > - 控制：显式的 turn 取消、followup / steer / inject 三种投递语义、后台任务完成如何唤醒 Agent
-> - 新变化（上一版基准 0.1.7-rc.2 → 0.2.1-alpha.2）：子 Agent 统一为"激活"、Agent Teams 直投 inbox、可超时的用户提问、失败 step 补写工具结果
+> - 新变化（相对 0.2.1-alpha.2）：`ctx.tools.register(..., { when })` + 每步 `resolve()`；模型选型在 step 准备时固定、`agent/request` 弃用；失败 step 补写工具结果等既有规则仍适用
 > - 动手：在真实会话日志里观察 step 边界与"模型自己决定多走一步"
 
 ## 7.1 先问"为什么"：循环是从哪来的？
@@ -50,18 +52,20 @@ sequenceDiagram
     U->>D: followup / steer（写入 inbox 并唤醒）
     D->>S: turn/start
     D->>D: 原子认领 next-step 全部 + 一条 next-turn
+    D->>D: 捕获 modelSelection；tools.resolve（条件工具 admission）
+    D->>P: system-prompt/assemble（无工具数组）
     D->>P: agent/pre-step（waterfall：reject 或 enter；兜底投影运行时上下文）
-    alt 拒绝 / 首批为空 / pre-step 失败
+    alt 拒绝 / 首批为空 / pre-step 失败 / TOOL_ACTIVATION_FAILED
         D->>S: turn/end（本轮不花 step）
     else 进入 step
         D->>S: step/start
-        D->>P: agent/request（waterfall：替换调用配置）
+        D->>P: agent/request（已弃用；不可改 provider/model/effort）
         D->>M: prepareCall 解析真实路由
         D->>S: system/message、user/message、request/header、request/context
         D->>M: 经 llm/stream 发出冻结的请求
         M-->>D: StreamChunk*（实时经 agent/assistant-stream 推给 UI）
         D->>S: assistant/message（或失败时 assistant/attempt）
-        loop 模型请求的每个工具调用
+        loop 模型请求的每个工具调用（仅本步 admitted 集合）
             D->>S: tool/call
             D->>T: tools/pre-execute → tools/execute → tools/post-execute
             D->>S: tool/result（按模型给出的顺序）
@@ -77,13 +81,29 @@ sequenceDiagram
 
 几个容易忽略的细节：
 
-- **先 `turn/start`，再认领，再 pre-step**。认领和它的那一次 pre-step 决策因此有了持久的 turn 归属。
-- `agent/request` 和 `prepareCall()` 都在 `step/start` 之后、系统提示词与用户消息**提交之前**运行；在这两个异步阶段取消，**两者都不会被提交**。
+- **先 `turn/start`，再认领，再工具 admission，再 assemble，再 pre-step**。认领和它的那一次 pre-step 决策因此有了持久的 turn 归属；`ResolvedToolSet` 在提示词组装与 `agent/pre-step` **之前**就定下来（升级指南 `conditional-tools`）。
+- **模型选型在 step 准备时捕获**（升级指南 `session-model-selection`）：`agent.model.current()` 的结果随本步及其重试固定；中途改选型记入投影，**下一个** step 才生效。`agent/request` 和 `prepareCall()` 仍在 `step/start` 之后、系统提示词与用户消息**提交之前**运行；在这两个异步阶段取消，**两者都不会被提交**。
 - 请求在发出前被"从日志推导并冻结"——这正是第 6 章"Model-visible means logged"的落地。
 - **运行时上下文**（当前工作目录、文件策略等，第 6 章）在 pre-step 监听器之后由兜底逻辑投影；而且每次请求**准入**时还会再求值一次动态上下文 provider、对齐保留下来的运行时上下文（升级指南 `working-directory`）。所以 provider 要返回"此刻的状态"，不能假设每个 step 只被调用一次。
-- 模型请求失败时，`agent/request-error` 可以返回 `{ kind: 'retry' }`，在**同一个打开的 step 里**重试：不重复 pre-step，也不重复追加用户消息。压缩插件就用它处理"上下文溢出"（第 13 章）。
+- 模型请求失败时，`agent/request-error` 可以返回 `{ kind: 'retry' }`，在**同一个打开的 step 里**重试：不重复 pre-step / 工具 resolve，也不重复追加用户消息。压缩插件就用它处理"上下文溢出"（第 13 章）。
 - 实时逐字显示走进程内的 `agent/assistant-stream`（start / chunk / end 帧）；它是瞬时的，持久证据是 step 结束前写入的那条 `assistant/message` 里内嵌的完整流。
-- **失败的 step 也要"把账还清"**（笔记 `2026-09-19-failed-step-tool-results.md`）：助手消息已经请求了工具，调度却在结果写完之前失败——如果就这样关闭 step 和 turn，后续请求会因为"有调用没结果"被要求配对的 provider 拒绝，而已关闭的 error turn 又不会被崩溃修复逻辑处理。现在驱动器在关闭失败 step **之前**，按助手给出的调用顺序为每个未回答的调用补写错误结果：有 `tool/call` 记录但没结果的得到 `TOOL_OUTCOME_UNKNOWN`（文字提醒不要盲目重试可能有副作用的操作），连调用记录都没有的得到 `TOOL_NOT_STARTED`；已提交的结果原样保留，turn 仍以原来的失败结束。没有新事件类型，也没有格式变化。
+- **失败的 step 也要"把账还清"**（笔记 `2026-09-19-failed-step-tool-results.md`）：助手消息已经请求了工具，调度却在结果写完之前失败——驱动器在关闭失败 step **之前**为每个未回答的调用补写错误结果：有 `tool/call` 记录但没结果的得到 `TOOL_OUTCOME_UNKNOWN`，连调用记录都没有的得到 `TOOL_NOT_STARTED`；已提交的结果原样保留。没有新事件类型，也没有格式变化。
+
+### 条件工具：通过 step admission 声明
+
+0.2.1-rc.2 起，工具是否出现在本步请求里，由注册时的条件决定，而不是在 `system-prompt/assemble` 里增删列表：
+
+```ts
+ctx.tools.register(myTool, {
+  when: ({ agent, modelSelection, signal }) =>
+    modelSelection.model === 'capable-model',
+})
+```
+
+- `AgentLoop` 对每个拟议 step 调用一次 `ctx.tools.resolve({ agent, modelSelection, signal })`，得到本步的 `ResolvedToolSet`；该集合管声明、Native 派发、PTC 绑定与嵌套调用，以及本步重试。条件为 `false` 则工具从以上全部消失；条件抛错则以 `TOOL_ACTIVATION_FAILED` 结束 turn。
+- `system-prompt/assemble` 只收到 `PromptPresentation`（sections / contexts / variables），**没有**工具数组；返回的 `tools` 会被忽略。提示词里若要写"可用工具"，应在 section 回调里用 `context.toolSet` 调 `ctx.tools.get()` / `schemas()`。
+- 模型点名一个未准入、集合已 dispose、或 step 中途被热替换掉的工具，得到 `UNKNOWN_TOOL` 而不会进实现。`exit_plan_mode` 从 Session **首次进入 plan mode** 的那一步起才声明，从未进过 plan 的会话请求里不再出现它。
+- 程序化调用条件工具时，自己 `resolve()` → 把 `toolSet` 传给 `assemble()` / `execute()` → 批次结束后 `dispose()`；不传集合的调用方（如实验性 `claude-code-mods` 的 `$.tool.call`）调不了条件工具。
 
 ### 三个 waterfall 闸门，和一个 serial 终点
 
@@ -91,11 +111,11 @@ sequenceDiagram
 
 | 事件 | 能做什么 | 不能做什么 |
 | --- | --- | --- |
-| `agent/pre-step` | 返回 `{ kind: 'reject' }` 拒绝本步，或 `{ kind: 'enter', messages }` 决定**哪些消息进入本步**（可改写、可合并）；还可以声明 `startsRequestSeries` 开启新的请求系列 | —— |
-| `agent/request` | 替换冻结的调用配置 `LlmCallConfig`（切换模型、推理强度等） | **不能改消息**：模型可见的内容必须走日志通道 |
-| `llm/stream` | 包装流式输出（例如 `dsh-session-checkpoint-policy` 用它在模型请求开始前先确保会话日志落盘（持久性检查点）；测试替身 `llm-replay` 在没注册适配器时用它直接回放录制的流） | —— |
+| `agent/pre-step` | 返回 `{ kind: 'reject' }` 拒绝本步，或 `{ kind: 'enter', messages }` 决定**哪些消息进入本步**；可声明 `startsRequestSeries`；载荷含本步 `modelSelection` | 不能改已经 `resolve()` 好的工具集合 |
+| `agent/request`（**已弃用**） | 现有监听器仍可调整**其它**调用控制；输出上限请用 `AgentOptions.maxTokens` | **不能改消息**；**不能改** provider / model / reasoning effort（须在 step 准备前 `agent.model.select()`）。不要新增监听器 |
+| `llm/stream` | 包装流式输出（例如 `dsh-session-checkpoint-policy` 在模型请求前先确保日志落盘；测试替身 `llm-replay` 回放录制流） | —— |
 
-它们回答了同一个问题：**"模型看到什么、用什么配置看"应该由谁决定？** 答案不是"主循环写死"，而是"插件在明确的闸门处加工"——而且闸门的职责被刻意收窄了：只有 pre-step 能决定输入内容，request 只管配置。这样"模型看到的输入"只有一个入口，审计时不必在多个钩子之间猜。
+它们回答了同一个问题：**"模型看到什么、用什么配置看"应该由谁决定？** 答案不是"主循环写死"，而是"插件在明确的闸门处加工"——闸门继续收窄：只有 pre-step 能决定输入内容；路由与推理强度在 step 准备时由 `agent.model` 固定；`agent/request` 只保留兼容路径。这样"模型看到的输入"和"本步用哪条路由"都只有一个入口。
 
 而 `agent/turn-stopping` 是 **serial**，没有 `next()`。它不是"任何一方都能喊停"的投票，恰恰相反：它在"模型已经什么都不欠"（没有进行中的工具调用、没有新 steer）时被 await，一个**反对停止**的监听器会调用 `agent.steer(...)` 塞进一条新输入，循环重新读 inbox——有新 steer 就再走一步，没有就关闭 turn。源码注释的原话是："**Data decides, so listener order cannot change the outcome.**" 反方向的控制（让工具循环提前结束）同样是数据：工具结果带上 `concludesTurn`，本 step 结束后就收尾——但它不会短路已经提交的 next-step 输入。
 
@@ -277,14 +297,17 @@ corepack pnpm dsh --profile headless "用 ls 和 cat 了解一下当前目录，
 ## 7.11 常见坑
 
 - **认为"一次提问 = 一次模型调用"**：错。一个 turn 可能多次请求，因为工具结果会再喂回模型；
-- **在 `agent/request` 里改消息**：它只能替换调用配置，要改模型看到的内容请用 `agent/pre-step` 或会话事件；
+- **在 `agent/request` 里改消息或改模型**：消息走 `agent/pre-step` / 会话事件；provider / model / effort 走 `agent.model.select()`（在 step 准备之前）。`agent/request` 已弃用，改路由会被主循环拒绝；
+- **在 `system-prompt/assemble` 里增删工具**：返回的 `tools` 会被忽略；用 `register(..., { when })` 与 step 的 `ResolvedToolSet`；
+- **条件为 false 的工具仍被程序化点名**：未带本步 `toolSet` 的调用得到 `UNKNOWN_TOOL`；自定义执行器要 `executable(name, agent, toolSet)`；
 - **在 `agent/pre-step` 里做重活**：它是每步必经之路，重活会拖慢整个循环；
 - **忘掉 waterfall 的 `next()`**：拦截了却不放行，下游的决策就丢了；包装 pre-step 时用 `{ ...decision, messages }` 保留下游声明的 `startsRequestSeries`；
 - **以为 pre-step 拒绝会把消息还回 inbox**：不会，认领是所有权转移；
 - **用 inject 去"叫醒"一个空闲的 Agent**：inject 不唤醒，需要唤醒请用 steer 或 followup；
 - **把取消当作可选项**：`exec.signal` 以及各事件 payload 里的 `signal` 是契约的一部分；不响应取消会让 `whenIdle()` 永远等下去，也别把某一轮的 signal 保存下来去控制另一轮；
 - **还在找子 Agent 的 `run_in_background` 或用 `job_output` 收子 Agent 结果**：已删除。委派工具返回 `subagentId`，结果走完成通知；代码里要同步拿结果，用 `startActivation({ ..., delivery: 'caller' })` 并记得 `dispose()`；
-- **把 Agent Teams 的 `{ sent: true }` 当成"对方已处理"**：它只表示目标 inbox 已接受。
+- **把 Agent Teams 的 `{ sent: true }` 当成"对方已处理"**：它只表示目标 inbox 已接受；
+- **把普通 Session fork 当成子代理**：普通 fork 无 `parentSession`；看 `origin === 'subagent'`（第 6 章）。
 
 ## 7.12 思考题
 
@@ -294,11 +317,13 @@ corepack pnpm dsh --profile headless "用 ls 和 cat 了解一下当前目录，
 4. `agent/turn-stopping` 用"数据决定"取代"监听器投票"。请设计一个"预算耗尽就停止"的插件：它应该挂在哪个扩展点、用什么数据表达"停"？（提示：比较 `concludesTurn`、`agent/pre-step` 的 reject 和 `agent.cancel()` 三者的语义差别）
 5. 后台任务完成通知从"默认最多唤醒 3 次"改成"默认不设上限"。你能想到哪种场景下默认上限反而更安全？如果你是部署方，会用什么信号决定是否配置 `maxConsecutiveWakes`？
 6. 可超时的用户提问把"前台等待"和"迟到回答"拆成两次结算，迟到回答用 `steer` 而不是 `inject` 投递。如果改用 `inject`，或者干脆让原来的工具调用一直挂着等回答，分别会出现什么问题？
+7. 条件工具的 `when` 在 assemble / pre-step **之前**求值一次。若你在 `agent/pre-step` 里根据本步消息决定"要不要暴露某个危险工具"，这个设计还能不能用？应该改成什么？（提示：对比 `when` 收到的 `modelSelection` 与消息内容）
+8. 用户在工具执行途中切换了模型。为什么当前 step 的重试仍用旧路由，而同 turn 的下一步才用新路由？这和"Model-visible means logged"有什么关系？
 
 ## 小结
 
 - step = 一次请求 + 工具调用；turn = 零到多个 step，在认领输入前打开、在"什么都不欠"时关闭；
-- 主循环是插件（`dsh-agent-loop`）：`agent/pre-step` 决定输入、`agent/request` 只换配置、`llm/stream` 包装流；`agent/turn-stopping` 是 serial 终点，决策落在数据（steer / `concludesTurn`）上；
+- 主循环是插件（`dsh-agent-loop`）：每步先 `tools.resolve`（条件工具 admission），再 assemble（无工具数组），再 `agent/pre-step`；`agent/request` 已弃用，选型走 `agent.model.select()`；`llm/stream` 包装流；`agent/turn-stopping` 是 serial 终点，决策落在数据（steer / `concludesTurn`）上；
 - inbox 有 next-turn / next-step 两个边界，每步前原子认领一次；followup / steer 唤醒，inject 静默；父子 Agent 之间统一用 steer；子 Agent 委派统一为激活（立即返回、完成通知入日志），Agent Teams 直投 inbox，迟到的提问回答也是一条 steer；
 - 失败的 step 在关闭前补写 `TOOL_OUTCOME_UNKNOWN` / `TOOL_NOT_STARTED` 结果，保证工具调用与结果始终配对；
 - 取消是显式的：类型化原因、每轮一个信号、协作式执行，结果以 `aborted` 及其原因入日志；

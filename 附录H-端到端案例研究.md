@@ -1,6 +1,6 @@
 # 附录 H 案例研究：用 DSH 从零搭一个个人编码助手
 
-> 前面的章节像零件手册，这个附录把它们**装成一台机器**。我们一步步从"什么都没有"搭出一个能用的个人编码助手——每一步都引用对应的章节，让你看到知识如何落地。本附录基于 DSH 0.2.1-alpha.2，命令默认在 deepseek-harness 根目录的 PowerShell 中执行。
+> 前面的章节像零件手册，这个附录把它们**装成一台机器**。我们一步步从"什么都没有"搭出一个能用的个人编码助手——每一步都引用对应的章节，让你看到知识如何落地。本附录基于 DSH **`0.2.1-rc.3`**（源码 commit `22ddee3792`），命令默认在 deepseek-harness 根目录的 PowerShell 中执行；本机 Node 需 **`>=24.9.0`**（`node --version` 自检）。
 
 ## H.1 需求定义：我要什么
 
@@ -24,7 +24,13 @@ flowchart LR
 
 ## H.2 第一步：跑起来（第 2 章）
 
-按第 2 章完成克隆、安装、构建（第 2.4 节），启动 web profile：
+按第 2 章完成克隆、安装、构建（第 2.4 节）。先确认 Node：
+
+```powershell
+node --version   # 应为 v24.9.0 或更高
+```
+
+再启动 web profile：
 
 ```powershell
 corepack pnpm dsh web
@@ -53,7 +59,7 @@ curl.exe -s -o NUL -w '%{http_code}' http://127.0.0.1:3080/
 
 3. **工作区与当前目录**：新建会话时选择你的项目目录；会话日志按原始工作目录分组存放在 `$DSH_HOME/sessions/--<cwd>--/<id>/`（第 6 章）。会话头部的 `cwd` 是原始项目（不可变），当前执行目录由 `ctx.workingDirectory` 投影，模型可以用 `working_directory({ cd })` 切换（第 6.8、13.12 节）。**"新会话"总是新的 Agent**——改过 preset 之后想立刻生效，就开一个新会话，不要指望复用工作区里的空白会话。
 
-验收：在 Web UI 里输入"列出当前目录并读一下 README，然后总结"，看到它真的调用了工具并返回总结。会话日志里能看到 `tool/call` / `tool/result` 事件——**审计从第一天就在**（第 6.9 节的实验教你读它）。
+验收：在 Web UI 里输入"列出当前目录并读一下 README，然后总结"，看到它真的调用了工具并返回总结。会话日志里能看到 `tool/call` / `tool/result` 事件——**审计从第一天就在**（第 6.9 节的实验教你读它）。`--dump-config` 里还应能看到已挂载的 `tool-executor-native`（或你显式启用的 `tool-executor-ptc`）——0.2.1-rc.2 起工具执行靠执行器插件，不再靠 `DSH_TOOLS_MODE`。
 
 ## H.4 第三步：加自己的工具（第 8 章 + 附录 D）
 
@@ -73,7 +79,8 @@ curl.exe -s -o NUL -w '%{http_code}' http://127.0.0.1:3080/
 1. **沙箱**（第 10.3 节）：`--dump-config` 确认 `sandbox` 条目启用；在支持的主机上它自动选择平台 runner，没有可用 runner 时以 `SANDBOX_UNAVAILABLE` 拒绝执行，**绝不静默裸跑**；
 2. **权限预设**（第 10.6 节）：`dsh-base` 带三种常规模式——`read-only`、`workspace-write`（两者审批策略都是 `ask`）和 `danger-full-access`（`never`，不再询问）。日常用 `workspace-write`：命令在沙箱里只能写工作区，需要越过这条边界的敏感动作按 `ask` 策略先弹审批。启用可选 bundle `auto-review` 后还会多出一种 `auto` 预设（第 13.8 节），审查器判定需要授权时同样走 `ask`；
 3. **写前先读**（`dsh-fs-observation-policy`）：防止它盲改没读过或已被外部改动的文件；
-4. **凭据清洗**（第 10.5 节）：子进程环境经 `scrubbedParentEnv()` 清洗，API Key 不传给模型下的命令。
+4. **凭据清洗**（第 10.5 节）：子进程环境经 `scrubbedParentEnv()` 清洗，API Key 不传给模型下的命令；
+5. **出站抓取**（若启用 `web_fetch`）：0.2.1-rc.2 起默认**可访问私有目标**——若助手不该碰内网，需另加网络限制或 `tools/pre-execute` 策略（附录 G.2.2）。
 
 验收：在 `workspace-write` 下让它"删掉工作区外的一个文件"，观察沙箱拒绝或审批卡片如何拦下这次操作；每一次审批请求和你的决定都记入该会话的审计日志。**安全不是附加功能，是配置项。**
 
@@ -128,6 +135,7 @@ curl.exe -s -o NUL -w '%{http_code}' http://127.0.0.1:3080/
 - **后台任务**（第 13.5 节）：长命令交给 `ctx.jobs`，完成后唤醒 Agent，不堵主循环；
 - **声明式 preset 与创造模式**（第 13.11 节）：用配置定义自己的 Agent 角色；创造模式能改 profile 的插件组成，每次操作需要 `danger-full-access` 或单次审批——谨慎，它装进来的宿主代码在工作区沙箱之外运行；
 - **执行坐标与可观测**（第 13.12 节）：会话工作目录、实验性 Git worktree（可选 bundle `tool-worktree`）、OTel 通道——把"在哪干活"和"看得见干活"也做成一等能力；
-- **可选与按需能力**（第 13.8 节）：随附的 11 个可选 bundle（会话搜索、Ralph、终端、徽章、会话标题、Agent Teams、语音输入、CoT 翻译、Auto review、Inspector、Git Worktrees）在插件页一键启用；Claude Code / Codex 子 Agent 是按需安装的组合包，装完才会出现在工具列表里。
+- **可选与按需能力**（第 13.8 节）：随附的 **14** 个可选 bundle（个性化推荐、CUA、会话搜索、Ralph、终端、徽章、会话标题、Agent Teams、语音输入、CoT 翻译、Auto review、Inspector、插件市场、Git Worktrees；清单见 `@deepseek-ai/dsh-official-bundles` 的 `OPTIONAL_BUNDLES`）在插件页一键启用；Claude Code / Codex 子 Agent 是按需安装的组合包，装完才会出现在工具列表里。
+- **会话分叉**（第 6 章）：从历史 fork 出的普通会话是**独立 Session**（不再写 `parentSession`）；不要把它们当成子代理。共享同一 `$DSH_HOME/sessions` 的所有入口需一起升级，否则旧 reader 可能拒读新 fork（附录 G.2.2）。
 
 到这里，你已经走完了从"读文档"到"有自己的 Agent 产品"的全程。剩下的，就是第 15 章开放问题里属于你的那个答案。

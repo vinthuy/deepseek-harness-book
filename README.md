@@ -3,7 +3,7 @@
 > 从零开始理解并动手使用 DeepSeek Harness（DSH）——一个"一切皆插件"的 Agent 运行时与框架。
 > 这本书不仅是教程，更是一次对现代 Coding Agent 系统的设计解剖：它为什么长这样、它解决了什么、代价是什么、未来会走向哪里。
 
-本书基于 `deepseek-ai/deepseek-harness` 源码撰写，版本基准 **`0.2.1-alpha.2`**（`packages/*/*` 下 52 个分组、331 个包；含 vendor/native/apps/benchmarks/website/python 共 353 个 workspace 包）。相对上一版基准 `0.1.7-rc.2`，本版按最新源码逐章更新：hooks/webhook/终端/ralph 等迁入 experimental 并以可选 bundle 提供、runtime invariants 移除、schedule 改为 `tool-schedule`、会话工作目录与 worktree、OTel 遥测、CoT 翻译、DeepSeek 模型发现需凭据、公开部署的监听信任配置，以及官方升级指南（`docs/upgrade-guide/`）都已纳入。更早的 `0.1.5-rc.2 → 0.1.7-rc.2` 变化（E2B 移除、SSH 远程执行、账号登录、PTC 运行时、会话格式 v4 等）保留在各章。目标读者是：
+本书基于 `deepseek-ai/deepseek-harness` 源码撰写，版本基准 **`0.2.1-rc.3`**（源码 commit `22ddee3792`；`packages/*/*` 下 52 个分组、363 个包；含 vendor/native/apps/benchmarks/website/python 约 386 个 workspace 包）。相对上一版基准 `0.2.1-alpha.2`，本版按最新源码逐章更新：Node 要求升为 `>=24.9.0`、官方 bundle 列表独立为 `dsh-official-bundles`、工具执行器可挂载插件、条件工具与 step admission、普通 Session fork 独立化、插件 `engines.dsh` 优先、插件市场 / CUA 等 experimental 能力，以及 `apps` 增至 5 个（含 `plugin-market-generator`）。更早的 `0.1.7-rc.2 → 0.2.1-alpha.2` 变化（hooks/webhook 迁入 experimental、runtime invariants 移除、会话工作目录、OTel、公开部署监听信任等）与 `0.1.5-rc.2 → 0.1.7-rc.2`（E2B 移除、SSH、账号登录、PTC、会话格式 v4）保留在各章。目标读者是：
 
 - 听说过 Agent Harness、想弄明白它和"模型/API/Agent 框架"有什么区别的开发者；
 - 想在本地跑起 DSH、读懂它的插件机制并开始写自己插件的工程师；
@@ -52,7 +52,7 @@
 
 ## 环境要求
 
-- Node.js `^22.19.0 || >=24.0.0`（本书示例使用 v24）
+- Node.js `>=24.9.0`（旧口径 `^22.19.0 || >=24.0.0` 已废弃；本书示例使用 v24）
 - pnpm（推荐通过 `corepack pnpm` 调用，仓库锁定 `pnpm@11.28.5`）
 - 一个 DeepSeek API Key（`deepseek-official` 路由），或 DeepSeek 账号登录（`deepseek-account` 路由，内置登录界面在桌面端）；只在跑真实模型时需要（未配置 API Key 时，模型选择器里不会出现 DeepSeek 分组），不跑模型也能完成绝大多数章节的练习（第 2、9 章）
 - Git、能访问 GitHub/npm registry 的网络

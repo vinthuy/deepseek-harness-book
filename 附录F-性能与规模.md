@@ -1,6 +1,6 @@
 # 附录 F 性能与规模：Agent 系统在什么量级下会慢
 
-> 前面章节讨论"怎么工作"，这个附录讨论"工作得多快、能撑多大"。Agent 系统的性能问题和传统 Web 服务不同——瓶颈往往不在请求数，而在**日志体积、上下文组装、执行环境开销、模型往返**。本附录的数字全部来自 HEAD（0.2.1-alpha.2）的源码常量、仓库级性能门 `benchmarks/` 及其设计笔记（`.agents/notes/` 下，路径省略该前缀）；凡是笔记里标明"只在某台参考机上测得"的数字，这里也照样标明。
+> 前面章节讨论"怎么工作"，这个附录讨论"工作得多快、能撑多大"。Agent 系统的性能问题和传统 Web 服务不同——瓶颈往往不在请求数，而在**日志体积、上下文组装、执行环境开销、模型往返**。本附录的数字全部来自 HEAD（`0.2.1-rc.3`，commit `22ddee3792`）的源码常量、仓库级性能门 `benchmarks/` 及其设计笔记（`.agents/notes/` 下，路径省略该前缀）；凡是笔记里标明"只在某台参考机上测得"的数字，这里也照样标明。运行与测量环境要求 Node.js **`>=24.9.0`**（升级指南 `node-24`）。
 
 ## F.1 事件溯源日志：最大的"慢"来源
 
@@ -60,7 +60,7 @@ flowchart LR
 
 - **位置与命名**：仓库级性能门放在顶层 `benchmarks/`，按"被测的用户路径"分目录，不按包结构；宿主侧用 `*.bench.ts`，客户端侧用 `*.bench.client.ts`。包内的 `.perf.ts` 只是不设门槛的诊断，不进 `test:bench`。
 - **命令**：`corepack pnpm run test:bench`（先 `build:bench` 构建库与 `benchmarks/.dsh-build/` 下的 worker，再构建 Web，最后用 `vitest.bench.config.ts` 编排）；CI 入口是 `check:ci:bench`。另有手动的 `test:web:perf`（`vitest.web.perf.config.ts`，收集 `apps/web/tests/**/*.perf.ts` 等高基数诊断），明确不在任何 CI 车道里。
-- **运行环境**：必需的 `node 24 / benchmarks` 任务跑在标准 GitHub 托管的 `ubuntu-24.04` 上，整个任务限时 20 分钟（上一版基准 0.1.7-rc.2 时是 15 分钟），独占车道——性能测量不和其它门禁挤在同一台机器上。
+- **运行环境**：必需的 `node 24 / benchmarks` 任务跑在标准 GitHub 托管的 `ubuntu-24.04` 上（与产品引擎要求一致：Node **`>=24.9.0`**，不再支持 Node 22），整个任务限时 20 分钟（更早基准 0.1.7-rc.2 时是 15 分钟），独占车道——性能测量不和其它门禁挤在同一台机器上。
 - **测量纪律**：每个样本在全新的已编译纯 Node 子进程里跑（去掉 `NODE_OPTIONS`、不挂 TypeScript loader），输入由固定常量合成（绝不使用录制的真实会话），通常取 5 个样本的中位数；内存预算在显式 GC 之后测量，另有一个 128 MB old-space 受限模式只检查"能不能跑完"。
 - **预算换算**：`benchmarks/support/calibration.ts` 的 `ciTimeBudget(expectedMs)` = 参考机预期 × `CI_TIME_SCALE`（2）× `PERFORMANCE_BUDGET_HEADROOM`（1.25）；内存和比值只乘 1.25。如果预期本身就是在托管机上测的（如 `session-corpus/`），只乘 1.25。预算是评审过的源码常量，**不能用环境变量覆盖**。
 - **换算报告**：每个有预算的计时端点在断言前都要交给 `support/scaling-report.ts` 的 `recordTimings`（尽量附上同一区间的进程 CPU 时间），整进程峰值 RSS 交给 `recordPeakMemory`。`support/machine-profiles.ts` 按 PassMark 单线程分数把结果换算到 2015、2019、2023、2026 年的笔记本和云主机上；每次运行写出 `benchmarks/.dsh-report/report.html`，CI 任务把它发布成 `benchmark-report` 制品。这份报告回答的是"在用户那种机器上大概多快"，门禁本身仍只看预算。
@@ -135,9 +135,9 @@ flowchart LR
 - **上下文组装**：`deriveMessages()` 带增量缓存，投影单元结果深冻结。`agent-continuation` 性能门的剖析曾发现，请求历史操作的大半时间花在请求构建里反复 `deepFreeze` 已经冻结过的历史上。这个优化后来落地了（`archived/simplification/2026-09-06-agent-request-freeze-evidence.md`）：每个循环用一个 `WeakSet<Message>` 记住已冻结的消息（`packages/core/agent-loop/src/agent.ts`），参考机（M4 Pro）上请求历史的中位数从 246.1 ms 降到 66.7 ms（−72.9%）。托管 CI 上的请求历史预算是 297 ms（238 × 1.25 向下取整）。
 - **监听器纪律**：第 5 章说过，监听器在主路径上，重活要移到 `ctx.jobs`。后台任务完成时以会话内通知唤醒拥有它的 Agent，**无需轮询**（第 7、13 章）。
 
-## F.6 启动与构建：353 个包的冷启动
+## F.6 启动与构建：约 386 个包的冷启动
 
-DSH 共有 353 个 workspace 包（其中 `packages/*/*` 下 52 个分组、331 个包），冷启动不是免费的：
+DSH workspace 合计约 **386** 个包（其中 `packages/*/*` 下约 **363** 个包、**52** 个非空分组；另有 apps、vendor、native、benchmarks、website、python/sdk-runtime 等）。相对书稿上一基准（0.2.1-alpha.2 时约 353 / 331）明显膨胀的部分包括 official-bundles、tool-executor、plugin-market、CUA 等。冷启动不是免费的：
 
 - **构建**：`build:lib:host` 是 `tsc -b tsconfig.host.json` 增量构建加 tsdown 打包，`build:lib:client` 对客户端做同样的事，`build:web` 用 Vite 构建前端；改一个包只重编它和受影响的依赖（第 2.4 节）。
 - **模块解析**：profile 启动时一次性计算不可变的解析代（`RuntimeResolution`）并装进 Node 的 ESM/CommonJS 解析器，不再在磁盘上创建和对账链接（第 4 章）。

@@ -3,10 +3,10 @@
 > 前两章看了循环怎么转、事件怎么流。这一章回答一个更具体的问题：**模型说"我要读文件"，这句话是怎么变成真实世界的文件读取的？** 答案是一个统一管线（`ctx.tools`）+ 一组可替换的"能力接缝"。
 
 > **本章你将学到**：
-> - 概念：工具管线、执行契约、接缝三角（定义 / Provider / Consumer）
+> - 概念：工具管线、执行契约、接缝三角（定义 / Provider / Consumer）、条件工具准入、执行器插件
 > - 设计：接缝 = 依赖倒置的极致（换 Provider 换执行世界）；为什么 E2B provider 被移除
-> - 新能力：后台任务接缝合并、工具输出 spill、动态工具更新、工具调用的三阶段呈现与参数预读、PTC runtime 与 native/ptc 二选一、MCP 资源与服务器说明
-> - 上一版基准 0.1.7-rc.2 → 0.2.1-alpha.2：工作目录与 worktree 接缝、SSH 辅助程序的显式启动模式、Python PTC 沙箱、`tool-schedule` 拆分、终端/Ralph/会话查询工具移入实验区
+> - 新能力：后台任务接缝合并、工具输出 spill、动态工具更新、工具调用的三阶段呈现与参数预读、PTC runtime、MCP 资源与服务器说明
+> - 上一版基准 0.2.1-alpha.2 → **0.2.1-rc.3**（commit `22ddee3792`）：`tool-executor-native` / `tool-executor-ptc` 显式挂载、条件工具按步骤准入、`tool-subagent-control` 三件套、`agent-instructions` 按指令链计 `maxBytes`
 > - 动手：读 `tool-bash` / `tool-fs` 生产级源码，画出"工具 → 管线 → 接缝 → Provider"
 
 ## 8.1 工具是什么：模型面与系统面
@@ -250,13 +250,69 @@ Python 后端在 0.2.1-alpha.1 补上了文件沙箱（升级指南 `python-ptc-
 
 > **命名更正**：旧稿中的 `code-runtime` / `code-runtime-python` 等叫法已经过时。笔记 `2026-09-12-ptc-runtime-vocabulary.md` 统一了词汇：包族 `ptc-runtime`、类型 `PtcRuntime`、服务 `ctx.ptcRuntime`，**没有**保留旧名的兼容包或第二个服务注册。面向模型的 `run_code` 工具及其 `code` 参数名保持不变。
 
-PTC 模式对工具作者是"免费"的：每个可见的已注册工具都能在程序里以 `await tools.<name>(args)` 调用，参数和返回值类型从同一套 schema 生成；子调用**重新进入完整的管线**（策略、守卫、审批一个不少），携带父令牌，记录 `tool/ptc-dispatch` 事件，成功时拿到的是策略之后的**规范值**而不是渲染文本——这正是 8.3 节"返回值必须结构化"的回报。子调用的并发上限是 `dsh-tools` 的 `maxParallelSubCalls`（默认 10）。
+PTC 模式对工具作者是"免费"的：每个可见的、被本步骤准入的工具都能在程序里以 `await tools.<name>(args)` 调用，参数和返回值类型从同一套 schema 生成；子调用**重新进入完整的管线**（策略、守卫、审批一个不少），携带父令牌，记录 `tool/ptc-dispatch` 事件，成功时拿到的是策略之后的**规范值**而不是渲染文本——这正是 8.3 节"返回值必须结构化"的回报。子调用的并发上限现在写在 **PTC 执行器**上：`@deepseek-ai/dsh-tool-executor-ptc` 的 `maxParallelSubCalls`（默认 10）；`agent-loop.maxParallelToolCalls`（默认也是 10）管的是主循环一批原生调用的上限，两处不要混用。
 
-### 每个 Agent 只用一种调用形式：native 或 ptc
+### 挂载执行器：native 与 ptc 是插件，不是 `dsh-tools` 的 mode
 
-上一版基准里，工具呈现模式有三种：`native`（每个工具一个函数 schema）、`ptc`（只暴露 `run_code` 和生成的 SDK），以及混合的 `both`。笔记 `2026-10-05-native-or-ptc-presentation.md` 删除了 `both`：同一批能力同时以两种形式出现在请求里，只带来 schema 排序、准入、配置和测试组合的膨胀，并没有新的执行能力。现在 `@deepseek-ai/dsh-tools` 和 `@deepseek-ai/dsh-agent-tool-presentation` 的 `mode` 只接受 `native` 或 `ptc`，配置 `both`（包括环境变量 `DSH_TOOLS_MODE=both`）会被拒绝，而不是被悄悄映射成另一种；代码里的 `ctx.tools.presentAs('both')` 也要改成二选一（升级指南 `tool-presentation-mode`）。不同 preset 仍然可以在同一个应用里选不同模式——"二选一"是按 Agent 的，不是按进程的。
+0.2.1-rc.2（升级指南 `tool-executor-plugins`）把执行从配置字段里拆了出来：`@deepseek-ai/dsh-tools` 仍负责注册与选择执行器，但加载时会拒绝已删除的 `mode` / `maxParallelSubCalls`。真正干活的是两个插件：
 
-## 8.9 MCP：外部工具、资源与服务器说明
+| 包 | 路径 | 角色 |
+| --- | --- | --- |
+| `@deepseek-ai/dsh-tool-executor-native` | `packages/core/tool-executor-native` | 原生执行：每个工具一个函数 schema |
+| `@deepseek-ai/dsh-tool-executor-ptc` | `packages/core/tool-executor-ptc` | PTC 执行：只暴露 `run_code` + 生成的 SDK；要求注入 `ctx.ptcRuntime` |
+
+base bundle（`packages/bundle/base/cordis.patch.yml`）同时挂上两行，默认 **启用 native、禁用 ptc**。内置 profile 已经装好执行器；自定义组合必须挂上其中一个。启用的执行器行是启动必需项——配置无效会直接终止启动；缺少 `ptcRuntime` 时 PTC 执行器无法启动，卸载运行时也会撤回执行器。Web / headless / SDK **不再**读 `DSH_TOOLS_MODE`，一律继承 base 的原生执行。需要 PTC 时用 overlay 翻转两行（升级指南里的 `ptc.yml` 骨架）：
+
+```yaml
+- id: tool-executor-native
+  disabled: true
+- id: tool-executor-ptc
+  disabled: false
+```
+
+```powershell
+# 在 deepseek-harness 根目录
+corepack pnpm dsh --profile headless --patch ./ptc.yml "task"
+```
+
+`@deepseek-ai/dsh-agent-tool-presentation` 的旧选择器仍可用，但已弃用——新组合应改执行器条目，而不是给 `tools` 写 `mode`。自定义执行器要实现 `describe` / `execute`；管线类型从 `@deepseek-ai/dsh-tools/pipeline` 导入（`ToolExecutionPipeline`、`executeToolBatch`），测试夹具从 `@deepseek-ai/dsh-tool-testkit` 导入——注册表主入口不再导出这些成员。
+
+更早一版还删过混合模式 `both`（升级指南 `tool-presentation-mode`）：同一批能力以两种形式同时出现在请求里只会膨胀配置与测试矩阵。现在"二选一"落在**挂载哪个执行器**上，不同 preset 仍可在同一进程里选不同执行器。
+
+### 条件工具：注册时声明 `when`，按步骤准入
+
+动态工具更新（8.6）管的是"注册表里有没有这个工具"；0.2.1-rc.2 的条件工具（升级指南 `conditional-tools`）管的是"**这一步**要不要把它交给模型"。注册可以带同步或异步条件：
+
+```ts
+ctx.tools.register(definition, {
+  when: ({ agent, modelSelection, signal }) => /* boolean | Promise<boolean> */,
+})
+```
+
+AgentLoop 在提示词组装与 `agent/pre-step` **之前**，以 `{ agent, modelSelection, signal }` 为每个拟议步骤计算一次条件，得到本步的 `ResolvedToolSet`；该步骤及其重试共用这份集合，决定工具声明、原生分发、PTC 绑定和嵌套调用。条件为 false 时，工具从以上所有位置消失；条件抛错时，本轮以 `TOOL_ACTIVATION_FAILED` 结束。
+
+连带的纪律：
+
+- `system-prompt/assemble` 不再携带工具数组——它只改段落、上下文与变量（`PromptPresentation`）；返回的 `tools` 会被忽略。想过滤工具，改用注册时的 `when`，并从 `modelSelection` 读本步的提供方 / 模型 / 推理强度；
+- 工具指引段落要把 `context.toolSet` 传给 `ctx.tools.get()` / `schemas()`，跟准入集合保持一致；
+- 没有已解析集合的条件工具调用、集合释放之后的调用、以及步骤中途热替换导致尚未开始的调用，都返回 `UNKNOWN_TOOL` 且**不进实现**——这对 MCP 重连、skill 重载同样成立；
+- `exit_plan_mode` 从会话**首次**进入计划模式的那一步起才声明，并在会话剩余部分保持声明；从未进过计划模式的会话，请求里不再列出它。
+
+程序化调用条件工具时，先 `ctx.tools.resolve({ agent, modelSelection, signal })`，把返回的 `toolSet` 交给 `assemble()` 与执行批次，批次结束后释放。
+
+## 8.9 子代理控制工具与指令链预算
+
+### `tool-subagent-control`：三个控制工具一次注册
+
+0.2.1-rc.1（升级指南 `subagent-control-tools`）把原先分散的控制面收成 `@deepseek-ai/dsh-tool-subagent-control`（`packages/subagent/tool-subagent-control`）：主入口**一起**注册 `send_message`、`interrupt_agent`、`list_agents`，要求注入 `tools`、`subagents`、`agents`。独立的 `/list-agents` 导出已移除——禁用这一行就关掉全部三个工具；若只要隐藏其中一个，用工具限制，而不是拆包。
+
+委派工具 `@deepseek-ai/dsh-tool-subagent` 一侧：配置键 `modelSelectionSettings` 改名为 `modelSelection`（控制可选子级路由字段）；每个工具作用域里若需要 `list_subagent_models`，须有**恰好一个**实例设 `modelDiscovery: true`（两个选项默认都是 false）。随附 Web / Desktop preset 为 spawn 打开这两项，fork 默认关闭路由字段。Host 的 `/model-selection-settings` 在 Agent 创建时记下授权策略——之后装工具或改设置都不会重新采样已有 Session；没有已记录策略时，发现与显式选择只允许当前父级路由。
+
+### `agent-instructions` 的 `maxBytes`：按链计，不是按整条基线
+
+`@deepseek-ai/dsh-agent-instructions`（`packages/context/agent-instructions`）把工作区指令做成模型可见的 `user/message`。0.2.1-rc.1（升级指南 `agent-instructions-chain-budgets`）起，`maxBytes` **分别**限制两条链——用户全局指令链（`$DSH_HOME/AGENTS.md` 与共享 agents 根）和项目指令链——因此同时含两条链的消息最多可达配置值的**两倍**。`dsh-base` 仍写 `maxBytes: 65536`；若部署仍要守原来的总量，把配置减半。被省略或截断的文件会出现在一行 `Workspace instruction budget ...` 标记里。`maxBytes` 属于基线标识，改完后恢复的每个会话都会收到一次完整的替代基线。
+
+## 8.10 MCP：外部工具、资源与服务器说明
 
 MCP（Model Context Protocol）服务器是另一类工具来源：
 
@@ -266,12 +322,12 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 
 这里又能看到第 6 章不变量的影子：资源内容**按需读取**，连接服务器不会预加载文档；读到的内容作为工具结果入日志；说明作为系统提示入日志——**没有任何 MCP 内容绕过日志进入模型**。
 
-## 8.10 常用接缝速查
+## 8.11 常用接缝速查
 
 | ctx 键 | 能力 | 内置实现（Provider） |
 | --- | --- | --- |
 | `ctx.llm` | 模型 | `llm-deepseek`、`llm-pi-ai`、`llm-replay`（测试） |
-| `ctx.tools` | 工具管线 | 核心服务，非接缝 |
+| `ctx.tools` | 工具管线 + 执行器选择 | 核心服务；执行由 `tool-executor-native` / `tool-executor-ptc` 挂载 |
 | `ctx.fs` | 文件系统 | `fs-local`、`fs-sandbox`、`fs-ssh` |
 | `ctx.subprocess` | 子进程 | `subprocess-local`、`subprocess-ssh` |
 | `ctx.shell` | Bash / PowerShell 执行器 | `bash-local`、`bash-sandbox`、`pwsh-local`、`pwsh-sandbox` |
@@ -295,7 +351,7 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 
 注意这张表的读法：**每一行都是一条"换 Provider 的选项"**。产品在左，实现在右，中间是稳定的接口。完整的、由脚本从 Cordis 声明生成的清单（含每个接缝的直接消费者和伴随插件）见 `docs/capability-seams.md`；每个工具包注册了哪些工具、依赖哪些服务，见 `docs/tool-catalog.md`。
 
-## 8.11 动手实验：读一个真实工具
+## 8.12 动手实验：读一个真实工具
 
 1. 打开 `packages/shell/tool-bash` 的源码（官方指定的生产级三包示例），回答：
    - 它的 `presentCall` 返回什么卡片？（terminal 卡片，`title` 就是命令，`description` 参数作为说明）为什么 schema 里 `description` 声明在 `command` 之前？（提示：8.5 节的参数顺序）
@@ -305,8 +361,10 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 2. 打开 `packages/fs/tool-fs`，看 `write` / `edit` 的 `presentCall` / `presentResult` 与 `output.presentationMeta`：diff 卡片的数据从哪来？为什么 `write` 的 `oldText` 是 `null`？（提示：呈现函数必须是纯函数，拿不到文件旧内容）
 3. 打开 `docs/tool-catalog.md`，找到 `@deepseek-ai/dsh-tool-fs-search` 那一行：它的 `glob` / `grep` 通过哪个接缝 spawn ripgrep？超量结果去了哪里？
 4. 画一张图：工具 → `ctx.tools` 管线 → 能力接缝（fs / shell）→ Provider（local / sandbox / ssh）。再在图上标出：`dsh-spill-policy` 挂在哪一环？`ctx.approval` 在哪一环？
+5. 打开 `packages/bundle/base/cordis.patch.yml`，找到 `tool-executor-native` 与 `tool-executor-ptc` 两行：默认谁启用？写一个最小 `ptc.yml` overlay，用 `corepack pnpm dsh --profile headless --patch ./ptc.yml "task"` 确认模型只看到 `run_code`（升级指南 `tool-executor-plugins`）。
+6. 在某个工具的 `register` 上加 `when: () => false`，观察它是否仍出现在请求的 `request/header.tools` 里；再故意让 `when` 抛错，确认轮次以 `TOOL_ACTIVATION_FAILED` 结束。
 
-## 8.12 常见坑
+## 8.13 常见坑
 
 - **工具返回"人类可读的 prose"而不是结构化值**：模型解析费劲，UI 无从渲染，PTC 程序也拿不到字段；
 - **`output.render`、`presentCall`、`presentResult` 里做 I/O**：它们会在直播和重放两个场景运行，必须是纯函数；
@@ -315,11 +373,14 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 - **把 UI 格式化塞进模型结果**：模型看到的是 render 出的内容；UI 卡片是独立的呈现投影（`presentCall` / `presentResult` / `presentationMeta`），别混在一起。另外，内置 Web 客户端**不**消费 `presentCall` / `presentResult`，它从原始 `tool/call` / `tool/result` 事件和 `meta` 派生卡片；
 - **以为同名工具可以随意改 schema 而没有代价**：可以改，但会重建工具声明、放弃前缀缓存；
 - **在 PTC 程序里解析工具的渲染文本来拿 id**：用规范值；
-- **还在配置 `mode: both` 或 `DSH_TOOLS_MODE=both`**：已被拒绝，每个 Agent 选 `native` 或 `ptc`；
+- **还在 `dsh-tools` 上写 `mode` / `maxParallelSubCalls`，或依赖 `DSH_TOOLS_MODE`**：字段已删除，环境变量也不再读取；改挂 `tool-executor-native` 或 `tool-executor-ptc`，并把 `maxParallelSubCalls` 写到 PTC 执行器配置；
+- **在 `system-prompt/assemble` 里删加工具**：waterfall 不再携带工具数组，返回的 `tools` 会被忽略——改用注册时的 `when`；
+- **调用条件工具却不传本步的 `toolSet`**：得到 `UNKNOWN_TOOL`，实现根本不会跑；
 - **工具自己从会话头部或 `process.cwd()` 解析相对路径**：用 `ctx.workingDirectory`，否则会话切换目录后你的工具会读写错项目；
-- **假设 `presentationMeta` 只在原生顶层调用时运行**：嵌套 PTC 调用也会运行它，投影要纯、要能识别操作的真实目标。
+- **假设 `presentationMeta` 只在原生顶层调用时运行**：嵌套 PTC 调用也会运行它，投影要纯、要能识别操作的真实目标；
+- **把 `agent-instructions` 的 `maxBytes` 当成整条基线的总预算**：它按链分别计，两条链同时出现时上限可到配置值的两倍。
 
-## 8.13 思考题
+## 8.14 思考题
 
 1. 接缝让"换 Provider"变成一处装配修改。但 Provider 的接口（比如 `ctx.fs` 的方法集）是谁定的？如果两个 Provider 的能力有差异（本地能 chmod，远程 SSH 主机的权限模型不同），接口怎么处理这种差异？（提示：能力探测 vs 降级；再想想 `fs-sandbox` 是如何"包装"而不是"替换"语义的）
 2. "工具返回数据，render 负责说话"。如果某个工具的结果特别大（比如整个仓库的 grep 输出），谁负责截断？这个决定应该放在工具里还是管线里？（提示：对比 `dsh-spill-policy` 与 `tool-fs-search` 各自的 spill）
@@ -327,13 +388,16 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 4. E2B provider 因为"缺一条独立控制通道"而被移除。如果让你为某个新的远程执行平台写一组 Provider，你会先确认它具备哪些能力？（提示：对照笔记中列出的控制通道、有界缓冲、关闭语义、断连清理）
 5. 动态工具更新把"逻辑事实（活跃工具与增减）"和"发给 provider 的形式"分开。如果反过来直接把 provider 格式存进日志，换一个不支持工具更新的模型继续这个会话时会发生什么？
 6. `create_worktree` 没有自己的"当前目录"状态，而是建好 checkout 后调用工作目录服务切过去。如果让 worktree 工具自己维护目录状态，文件工具、shell、子 Agent 分别会遇到什么不一致？
+7. 条件工具的 `when` 按步骤计算一次，热重载却会让步骤里尚未开始的同名调用变成 `UNKNOWN_TOOL`。这和"动态工具更新保住前缀缓存"之间有什么张力？你会把哪类工具做成条件工具，哪类坚持常驻？
+8. 执行器拆成插件之后，自定义组合漏挂执行器会在启动期失败，而不是运行到第一次工具调用才失败。请对比这两种失败时机对运维与安全的影响。
 
 ## 小结
 
 - 工具 = 模型与世界的闸门：参数校验、策略、执行、结果规范化、UI 呈现；schema 自动进入请求并记录在 `request/header` 中；
 - 管线：`tools/pre-execute` → 审批 / 单调守卫 → `tools/execute` → 工具本体 → `tools/post-execute` → `tools/result`；spill、超时、钩子都以插件形式挂在管线上；
 - 接缝三角：定义 / Provider / Consumer——换 Provider 换执行世界；E2B 被移除、远程执行世界如今由 POSIX SSH 这组 Provider 提供，消费者无需改动；
-- 新能力各守边界：`ctx.jobs` 一环一投影一事件流；工具调用三阶段与参数预读只改呈现；动态工具更新不改持久格式；PTC runtime 统一为 `ptc-runtime` 词汇，每个 Agent 在 native / ptc 中二选一，Python 后端强制共享沙箱；MCP 的资源和说明都经由日志进入模型；
+- 执行形态由 `tool-executor-native` / `tool-executor-ptc` 显式挂载（base 默认 native）；条件工具经 `when` + 步骤 `ResolvedToolSet` 准入；`tool-subagent-control` 一次注册三个控制工具；`agent-instructions.maxBytes` 按指令链分别计；
+- 新能力各守边界：`ctx.jobs` 一环一投影一事件流；工具调用三阶段与参数预读只改呈现；动态工具更新不改持久格式；PTC runtime 统一为 `ptc-runtime` 词汇，Python 后端强制共享沙箱；MCP 的资源和说明都经由日志进入模型；
 - 0.2 系列新增 `ctx.workingDirectory` 与实验性 `ctx.worktrees`，SSH 辅助程序改为显式 `launch` 模式并可打包内嵌 Node；终端、Ralph、会话查询工具移入实验区，提醒工具拆为 `tool-schedule`；
 - 生产级参考：`tool-bash`（terminal 卡片）、`tool-fs`（diff 卡片）。
 

@@ -1,6 +1,6 @@
 # 附录 D 从零写一个插件：端到端练习
 
-> 这是全书唯一的"抄代码"附录，目的是让你**亲手跑通一个插件**。我们做一个最简单的工具：统计一个文件的行数。本附录基于 DSH 0.2.1-alpha.2（相对上一版基准 0.1.7-rc.2，插件 API 本身没有变化，变的是版本范围、`dsh plugin` 的参数位置和子路径插件的展示元数据），走两条路：路线 A 在源码仓库里用 `--patch` 临时挂载，最快看到效果；路线 B 把它打包成一个可安装的 **bundle**，用 `dsh plugin` 或 Web 插件页装进 profile。做完之后，再去读 `packages/fs/tool-fs/src/read.ts` 这样的生产级工具，会发现结构几乎一样。
+> 这是全书唯一的"抄代码"附录，目的是让你**亲手跑通一个插件**。我们做一个最简单的工具：统计一个文件的行数。本附录基于 DSH **`0.2.1-rc.3`**（源码 commit `22ddee3792`；相对上一版书稿基准 `0.2.1-alpha.2`，工具注册 API 本身没有变化，变的是**兼容性优先读 `engines.dsh`**、官方组合包名单改从 `@deepseek-ai/dsh-official-bundles` 导入，以及 peer / engines 版本应对齐 rc.3）。走两条路：路线 A 在源码仓库里用 `--patch` 临时挂载，最快看到效果；路线 B 把它打包成一个可安装的 **bundle**，用 `dsh plugin` 或 Web 插件页装进 profile。做完之后，再去读 `packages/fs/tool-fs/src/read.ts` 这样的生产级工具，会发现结构几乎一样。
 
 ## D.1 我们要做什么
 
@@ -135,15 +135,15 @@ count-lines/
   },
   "files": ["index.js", "cordis.patch.yml", "icon.svg", "locale/*.json"],
   "engines": {
-    "dsh": ">=0.2.1-alpha.2"
+    "dsh": ">=0.2.1-rc.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.5-alpha.1",
-    "@deepseek-ai/dsh-tools": "^0.2.1-alpha.2"
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.3"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.5-alpha.1",
-    "@deepseek-ai/dsh-tools": "^0.2.1-alpha.2"
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.3"
   },
   "dsh": {
     "manifestVersion": 1,
@@ -154,13 +154,14 @@ count-lines/
 }
 ```
 
-逐项说明（类型定义见 `@deepseek-ai/dsh-package-manifest` 的 `DshPackageManifest` / `DshManifest`）：
+逐项说明（类型定义见 `@deepseek-ai/dsh-package-manifest` 的 `DshPackageManifest` / `DshManifest`；兼容性实现见 `packages/boot/app-boot/src/plugin-compatibility.ts`，升级指南 `v0.2.1-alpha.3/plugin-engines-dsh`）：
 
 - **`dsh.bundle.patch`**：必需。它让这个包成为 bundle；也可以写成有序数组，多个文件按顺序合成一层，每个文件里的相对插件路径相对该文件解析。没有这个声明的包，`dsh plugin add` 仍会把它装成普通依赖，但只打印警告、不激活任何层；Web 插件页的引导式安装则会在安装前直接拒绝它；
-- **`peerDependencies`**：需要与宿主**共享同一实例**的 DSH 包放在这里（`@deepseek-ai/cordis`、`@deepseek-ai/dsh-tools`）。运行时解析会让这些 peer 使用正在运行的 dsh 安装里的那一份；同样的包再写进 `devDependencies`，供你的类型检查和单元测试使用——仓库里的包都这么做；
-- **兼容性**：真正生效的检查是 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` 形式的 peer 范围对比运行时版本（`packages/boot/app-boot/src/plugin-compatibility.ts`，用 `includePrerelease` 匹配，所以预发布版本参与范围匹配）。它在两个时刻生效：**安装前**——`add` 一个本地路径或 registry 包时，插件管理器先读出它声明的 peer，不兼容就在 pnpm 运行前拒绝（git 地址和 tarball 要先取回，所以装完再判、不兼容就还原）；**启动时**——不匹配的 bundle 会被跳过（stderr 打印一次 `skipping profile bundle ...` 并附上不兼容的 peer），它的配置层不生效。两处都可以被 profile 的 `compatibility.json` 里"精确包版本 + 精确 dsh 版本"的豁免放行；
-- **0.x 的脱字符陷阱**：semver 里 `^0.1.7-rc.2` 的意思是 `>=0.1.7-rc.2 <0.2.0`，所以上一版写法在 0.2.1-alpha.2 上**会被判为不兼容**。DSH 仍处于 0.x，`^0.2.1-alpha.2` 也只覆盖到 `<0.3.0`——跨 minor 升级时记得更新 peer 范围；`@deepseek-ai/cordis` 不在 `dsh-*` 名字空间里，不参与这项检查，但仍应与运行时一致；
-- **`engines.dsh` 与 `dsh.manifestVersion`**：都是可选的声明性字段，当前安装器和加载器**不强制检查**，写上是为了让读者和未来的工具知道你面向哪个版本、用哪版声明格式；
+- **`peerDependencies`**：需要与宿主**共享同一实例**的包放在这里（`@deepseek-ai/cordis`、`@deepseek-ai/dsh-tools`）。运行时解析会让这些 peer 使用正在运行的 dsh 安装里的那一份；同样的包再写进 `devDependencies`，供类型检查和单元测试使用——仓库里的包都这么做；
+- **`engines.dsh`（优先）**：自 v0.2.1-alpha.3 起，若包自身声明了 `engines.dsh`，安装器与 profile 启动**只根据该范围**判定与运行时 dsh 版本是否兼容，**忽略** `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` peer 范围；只有**缺少** `engines.dsh` 时才回退到 peer 规则。`includePrerelease: true`，所以 `0.2.1-rc.3` 能匹配 `>=0.2.1-rc.3`。`workspace:` 写在 `engines.dsh` 里一律视为不兼容；`engines` 不是对象或 `engines.dsh` 不是字符串时，清单无法读取，包会被拒绝。拒绝记录里的字段名是 `requirements`（不再是 `peers`）：按 engines 规则时键为 `engines.dsh`，回退 peer 时键为 peer 包名；
+- **peer 回退规则**（仅当没有 `engines.dsh`）：每个 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` peer 都必须满足运行时版本。检查在两个时刻生效——**安装前**（本地路径 / registry：不兼容则 pnpm 前拒绝；git / tarball：装完再判，不兼容则还原）与**启动时**（不匹配的 bundle 被跳过，stderr 打印 `skipping profile bundle ...`）。profile 的 `compatibility.json` 仍可用"精确包版本 + 精确 dsh 版本"豁免；
+- **0.x 的脱字符陷阱**：若你删除 `engines.dsh`、只靠 peer，则 `^0.2.1-rc.3` 在 0.x 下只覆盖到 `<0.3.0`——跨 minor 要更新范围。本附录示例**同时**写了 `engines.dsh` 与 peer：前者管兼容性，后者管共享实例；`@deepseek-ai/cordis` 不在 `dsh-*` 名字空间里，不参与 peer 回退检查，但仍应与运行时一致；
+- **`dsh.manifestVersion`**：可选的声明格式版本，写上便于工具识别；
 - **`icon` 与 `./package.json` 导出**：插件页不激活插件，直接读取包的 `package.json` 和 `locale/*.json` 来展示图标、标题和说明，所以要把它们导出并放进 `files`。图标支持 SVG、PNG、JPEG、WebP，最大 256 KiB，且必须位于包内；包根插件不写 `icon` 时，也可以导出一个 `./icon` 资源代替。
 
 ### locale\zh.json 与 locale\en.json
@@ -289,7 +290,17 @@ corepack pnpm dsh demo
 
 在 Web profile（带 HMR）里装好并启用之后，插件管理器会为 profile 发布新的一代运行时解析表（第 4 章 4.8 节），你的 bundle 的私有依赖和包名立刻可解析，不需要重启；但**覆盖一个已安装的版本**（例如重新安装改过的 `count-lines`）会报告 `restart-required`，需要重启进程才能加载新代码。
 
-插件页的"官方"分组里还会看到两类不需要你自己打包的 bundle：随安装附带的可选 bundle（只需打开开关）和按需安装的 Claude Code / Codex 集成（第 4 章 4.5 节）。它们走的是和你的 `dsh-count-lines` 同一个安装器——这也说明，一个第三方 bundle 只要按本附录的格式写好，就和官方 bundle 处在同一条通路上。
+插件页的"官方"分组里还会看到两类不需要你自己打包的 bundle：随安装附带的可选 bundle（只需打开开关）和按需安装的 Claude Code / Codex 集成（第 4 章 4.5 节）。这两份名单**不要**再从 `@deepseek-ai/dsh-app-boot` 导入——升级指南 `v0.2.1-rc.2/official-bundle-lists` 已把它们迁到独立数据包：
+
+```ts
+import {
+  OPTIONAL_BUNDLES,
+  ON_DEMAND_BUNDLES,
+  PROFILE_TEMPLATES,
+} from '@deepseek-ai/dsh-official-bundles'
+```
+
+`OPTIONAL_BUNDLES` / `ON_DEMAND_BUNDLES` / `PROFILE_TEMPLATES` 等值与类型不变，只是模块边界变了；`initProfile` / `loadProfile` 仍从 app-boot 导入。它们走的是和你的 `dsh-count-lines` 同一个安装器——这也说明，一个第三方 bundle 只要按本附录的格式写好，就和官方 bundle 处在同一条通路上。若你还开启了实验性的插件市场组合包（第 15 章），发现页读到的兼容性字段同样优先看条目里的 `engines.dsh`。
 
 ## D.6 成功标准（怎么确认做对了）
 
@@ -359,9 +370,12 @@ ctx.on('tools/result', (exec, result) => {
 - **路线 A 用了相对路径或反斜杠**：路径解析不到时，加载器记录解析失败并继续启动，你的工具就是"没出现"；
 - **路线 B 的 `name` 写成文件路径**：bundle 补丁里要写包名，让 Node 从 profile 里解析；
 - **包没有 `dsh.bundle`**：命令行安装后只有警告、没有配置层；Web 插件页直接拒绝安装；
-- **peer 范围不覆盖当前 dsh 版本**：安装时被拒绝，或启动时打印 `skipping profile bundle "dsh-count-lines": ...`，整个 bundle 层被跳过；更新 peer 范围（注意 0.x 下 `^0.1.x` 不覆盖 `0.2.x`），或按提示在 `compatibility.json` 里登记精确版本豁免；
+- **`engines.dsh` 与运行时不匹配**：有 `engines.dsh` 时 peer 范围帮不上忙——安装被拒或启动时 `skipping profile bundle "dsh-count-lines": ...`（`requirements` 里键为 `engines.dsh`）；把范围改到覆盖当前 dsh（本附录示例为 `>=0.2.1-rc.3`），或删除该字段以回退 peer 规则，或在 `compatibility.json` 里登记精确版本豁免；
+- **`engines.dsh` 写成 `workspace:*`**：一律视为不兼容，改成普通 semver 范围；
+- **peer 范围不覆盖当前 dsh 版本**（仅当没有 `engines.dsh`）：同样会被拒绝或跳过；注意 0.x 下 `^0.1.x` 不覆盖 `0.2.x`；
+- **还从 `@deepseek-ai/dsh-app-boot` 导入 `OPTIONAL_BUNDLES` / `ON_DEMAND_BUNDLES`**：已迁到 `@deepseek-ai/dsh-official-bundles`，旧导入会编译或加载失败；
 - **`--profile` 写在了 pnpm 命令之后**：`dsh plugin add <包> --profile demo` 会报 `required option '--profile <name>' not specified`，改成 `dsh plugin --profile demo add <包>`；
-- **子路径插件导出了 `package.json` 当展示清单**：0.2.1-alpha.1 起不再读取，标题和说明改放 `<子路径>/locale/*.json`，图标改为导出 `<子路径>/icon`；
+- **子路径插件导出了 `package.json` 当展示清单**：不再读取，标题和说明改放 `<子路径>/locale/*.json`，图标改为导出 `<子路径>/icon`；
 - **`parameters` 少了 `required: true`**：模型可能不传这个参数，`execute` 里拿到 `undefined`；
 - **`render` 里读文件**：render 必须是纯函数，只根据参数和规范值生成内容；
 - **忘了 `exec.signal`**：取消后读取还在进行，留下悬空的工作。

@@ -1,6 +1,6 @@
 # 附录 A 术语表
 
-按首字母排序（中文词条按拼音就近归入）。术语口径以源码 HEAD（0.2.1-alpha.2）与官方 `docs/glossary.md` 为准；`docs/glossary.md` 只收录少数核心领域词（seam、scope、goal、turn/step/round、Ralph 等），这里在它的基础上补齐全书用到的其它术语。相对上一版基准 0.1.7-rc.2 新增或含义变化的词条，在括号里注明了版本。
+按首字母排序（中文词条按拼音就近归入）。术语口径以源码 HEAD（`0.2.1-rc.3`，commit `22ddee3792`）与官方 `docs/glossary.md` 为准；`docs/glossary.md` 只收录少数核心领域词（seam、scope、goal、turn/step/round、Ralph 等），这里在它的基础上补齐全书用到的其它术语。相对上一版书稿基准 `0.2.1-alpha.2`（以及更早的 `0.1.7-rc.2`）新增或含义变化的词条，在括号里注明了版本。
 
 ## A
 
@@ -31,13 +31,15 @@
 - **cli-help（`docs/cli-help.md`）**：由 `scripts/gen-cli-help.ts` 生成的完整 CLI 帮助参考（启动器、`dsh plugin`、各随附 profile），`verify-cli-help` 检查它是否过期（第 2、14 章，附录 B）。
 - **compaction（压缩）**：把会话的旧区间在"表面"上替换为摘要（`surfaceOp: replace`），原始事件仍留在日志里。默认实现 `dsh-compaction-basic`（`thresholdRatio` 默认 0.8、`retainRatio` 默认 0.16），另有工具结果裁剪 `dsh-compaction-tool-result-pruner`、图片卸载 `dsh-compaction-image-offload`（第 6、13 章，附录 F）。
 - **compatibility.json**：profile 目录中的兼容豁免表：为"精确插件版本 × 精确 dsh 版本"登记豁免，使 peer 范围不匹配的 bundle 仍被加载（第 4 章、附录 D、附录 G）。
-- **computer-use**：`packages/computer-use/computer-use`（`ctx.computerUse`），与 browser-use 同样只做 Provider 名称登记；实验 Provider 为 Cua Driver 的 MCP 与原生两种形态。Provider 不为会话预留桌面（第 13 章）。
+- **computer-use**：`packages/computer-use/computer-use`（`ctx.computerUse`），与 browser-use 同样只做 Provider 名称登记；实验 Provider 为 Cua Driver 的 MCP 与原生两种形态。Provider 不为会话预留桌面（第 13 章）。与实验性 **CUA** 包族（见下）不同：后者是直接挂载的原生电脑操作工具链。
+- **conditional tools（条件工具）**（0.2.1-rc.2）：工具可在 step admission 声明条件下才对本步可见/可执行（升级指南 `v0.2.1-rc.2/conditional-tools`；第 8 章）。
 - **Consumer**：注入并使用某个服务的一方，通常是模型工具（如 `dsh-tool-fs`）。
 - **Context**：Cordis 的上下文对象，按 `ctx.<key>` 访问服务。
 - **Cordis**：DSH 底层插件框架（vendor 自 cordiverse/cordis，位于 `vendor/cordis`），提供 Context、插件、类型化事件、可逆副作用与 Fiber（第 3 章）。
 - **cordis.yml / cordis.patch.yml**：插件条目列表与补丁文件。bundle、profile、home 各有一层 `cordis.patch.yml`，补丁按 `id` 替换条目或 `insert` 新条目（第 4 章）。
 - **CoT 翻译（思维链翻译）**：可选 bundle `dsh-experimental-cot-translation-bundle`（0.2.1-alpha.2 新增），把模型的推理内容翻译后展示。底层翻译服务是实验包 `@deepseek-ai/dsh-experimental-translator`（`ctx.translator`），provider 为 `bing`、`google`、`deepseek-account`、`deepseek-official`，付费路由只接受精确的 `deepseek-flash` 且关闭思考，否则报 `TRANSLATION_UNAVAILABLE`；会话内结果以 `plugin:translator/*` 记录复用（第 6、9、13 章）。
 - **credentialRef（凭据引用）**：配置里只存引用、不存明文的凭据指针（`CredentialRef`，键形如 `<owner>/<id>`）。按请求解析，改了立即生效；API Key 路由默认引用 `DEEPSEEK_API_KEY`（第 9 章）。
+- **CUA（Computer Use Agent）**（0.2.1-rc.2）：实验包族 `@deepseek-ai/dsh-cua` / `dsh-cua-bundle` / `dsh-cua-macos`（`packages/experimental/cua*`），经可选 bundle `cua-bundle` 启用；提供原生电脑操作工具（截图、点击等），坐标与 preset 作用域见升级指南 `cua-relative-coordinates`、`cua-preset-scope`（第 10、13 章）。
 
 ## D
 
@@ -56,8 +58,9 @@
 - **Effect（副作用）**：插件通过 Cordis 做的注册都是 effect，卸载时自动撤销；Cordis 不管理的资源用 `ctx.effect()` 包装并返回销毁函数（第 3 章）。
 - **emit**：观察语义的分发模式，不等待、无返回值（第 5 章）。
 - **enforcement**：`ctx.sandbox.confine()` 如实上报的约束强度，`full` 或 `partial`（第 10 章）。
+- **engines.dsh**（0.2.1-alpha.3）：插件 / 组合包 `package.json` 里声明的 DSH 引擎版本范围。兼容性检查**优先读它**；有 `engines.dsh` 时忽略 DSH peerDependencies，缺省才回退到 peer；`workspace:` 写在 `engines.dsh` 里视为不兼容。拒绝记录字段由 `peers` 改名为 `requirements`（升级指南 `v0.2.1-alpha.3/plugin-engines-dsh`；第 4 章、附录 D、附录 G）。
 - **Entry（条目）**：配置树里的一行插件声明（`id` + `name` + `config`，可带 `disabled`、`inject`、`group`、`isolate`）。
-- **experimental package（实验包）**：位于 `packages/experimental/` 的包。0.2.1-alpha.2 把 hooks（`hook-protocol`、`hooks-claude-code`、`hooks-codex`）、`webhook` / `webhook-github`、`tool-terminal`、`tool-ralph`、`tool-session-query` 等移入这里，**包名不变**，目录与包名的对应以 `scripts/experimental-package-policy.ts` 为准。**安装与组合相互独立**：CLI 不再默认依赖 hooks/webhook，profile 禁用自动 peer 安装，装了包也要选中 bundle 或显式 `insert` 才会挂载（第 4、13 章）。
+- **experimental package（实验包）**：位于 `packages/experimental/` 的包（HEAD 约 58 个目录）。0.2.1-alpha.2 把 hooks（`hook-protocol`、`hooks-claude-code`、`hooks-codex`）、`webhook` / `webhook-github`、`tool-terminal`、`tool-ralph`、`tool-session-query` 等移入这里；此后又陆续加入 plugin-market、cua、action-cards、recommendations、subagent-oar 等，**包名不变**，目录与包名的对应以 `scripts/experimental-package-policy.ts` 为准。**安装与组合相互独立**：CLI 不再默认依赖 hooks/webhook，profile 禁用自动 peer 安装，装了包也要选中 bundle 或显式 `insert` 才会挂载（第 4、13 章）。
 
 ## F
 
@@ -65,7 +68,7 @@
 - **fail-loud**：启动与运行期失败要响亮暴露：必需条目未激活即启动失败；未捕获异常和未处理的 rejection 一律写诊断并以 1 退出（`installFailLoud`，第 14 章）。
 - **fatal diagnostics / crash report（致命诊断 / 崩溃报告）**：CLI 以 `fatal uncaught exception` / `fatal load failure` 为标签写 `util.inspect` 诊断；Desktop 在弹致命对话框之前把崩溃报告写进应用日志目录（第 14 章、附录 G）。
 - **Fiber**：一个插件实例的运行时句柄，有 PENDING / LOADING / ACTIVE / FAILED / DISPOSED 等状态；`inject` 的服务缺失时停在 PENDING（第 3 章）。
-- **fork**：从已有会话的某个边界派生子会话，新会话继承前缀并以 `session/end-seed` 标记继承边界（第 6 章）。
+- **fork（独立会话分叉）**：从已有会话的某个边界复制前缀并继续追加，以 `session/end-seed` 标记继承边界。**0.2.1-rc.3** 起普通 fork 是**独立 Session**：不再写入 `SessionHeader.parentSession` / 客户端 `parentSessionId`，也不再被当成子代理缩进或触发 `subagent.started`；子代理（含使用 fork backend 的）仍保留直接创建者。判断子代理应看 `origin === 'subagent'`，不要把有 `parentSession` 的一律当成 subagent（升级指南 `v0.2.1-rc.3/independent-session-forks`；第 6 章）。
 
 ## G
 
@@ -91,7 +94,7 @@
 ## L
 
 - **Landlock**：Linux 内核 LSM 沙箱，DSH 通过原生启动器 `@deepseek-ai/node-addon-system/landlock-run`（自我限制后 exec）使用，是 bwrap 之后的回退 runner（第 10 章）。
-- **lineage（谱系）**：父子关系作为数据携带（`parentSession`、`delegationDepth`、`subagentDepth`），不影响可见性（`docs/glossary.md`）。
+- **lineage（谱系）**：子代理等关系作为数据携带（`delegationDepth`、`subagentDepth`，以及子代理仍保留的创建者字段），不影响可见性（`docs/glossary.md`）。**0.2.1-rc.3** 起普通 Session fork **不再**记录 `parentSession`；不要用"有没有 parent"判断是否为子代理，应看 `origin === 'subagent'`（见 fork）。
 - **listener trust（监听、公告与信任分离）**：`dsh web` 把三件事拆成互不蕴含的参数：`--host` 决定**监听**在哪个具体地址、`--public-url` 决定**公告**什么地址、`--trusted-host` 决定**信任**哪些 authority。公告一个 URL 不会让它被信任；所绑定的具体 IP 会被信任围栏直接接受；通配地址（`0.0.0.0`、`::`）在加载时就被拒绝（第 2、11 章，附录 G）。
 - **Loader**：Cordis 的配置加载器，按条目挂载插件。0.1.7 中 vendored Loader 回退为**非事务式**：失败不回滚，由应用层启动审计报告未激活的条目（第 3 章）。
 
@@ -102,13 +105,15 @@
 
 ## N
 
+- **Node.js 引擎要求**（0.2.1-rc.2）：根 `package.json` 的 `engines.node` 为 **`>=24.9.0`**；旧口径 `^22.19.0 || >=24.0.0` 已废弃。影响 npm 安装、源码检出与显式 `DSH_RUNTIME_MODE=node` 的 Python SDK 开发载体；打包 Desktop 与 Python SDK 内置可执行文件自带运行时（升级指南 `v0.2.1-rc.2/node-24`；第 2、14 章，附录 G）。
 - **no-response**：DeepSeek 账号登录错误码 `SignInErrorCode` 的新成员（0.2.1-alpha.1）：fetch 在拿到任何 HTTP 响应前就失败（含单次请求超时）。此前这类失败报 `network`；现在 `network` 只表示 HTTP 响应错误等通用失败，`expired` 仍表示授权尝试到期。登录对话框只对 `no-response` 给出网络排查提示（第 2、9 章，附录 G）。
 
 ## O
 
 - **observation policy（写前先读）**：`dsh-fs-observation-policy`，要求文件写入前先读取过该文件，文件在读后被改动则拒绝写入（第 10 章）。
-- **on-demand bundle（按需安装的官方 bundle）**：`official-bundle-packages.ts` 的 `ON_DEMAND_BUNDLES`（0.2.1-alpha.2 新增）：`@deepseek-ai/dsh-subagent-claude-code` 与 `@deepseek-ai/dsh-subagent-codex`。它们不进安装依赖，插件页"官方"分组凭离线目录展示，用户打开时才按当前版本经普通 bundle 安装器下载（第 4、13 章）。
-- **optional bundle（可选 bundle）**：随 CLI 安装附带、默认关闭的 bundle，清单是 `profile.ts` 的 `OPTIONAL_BUNDLES`，HEAD 共 11 项：会话搜索（`session-search`）、Ralph（`ralph-bundle`）、持久终端（`terminal-bundle`）、技能徽章（`badge-skill-bundle`）、会话标题（`session-titles-bundle`）、Agent Teams（`agent-team-profile`）、语音输入（`voice-input-bundle`）、CoT 翻译（`cot-translation-bundle`）、Auto review、Inspector（`inspector-profile`）、Git Worktrees（`tool-worktree`），包名都带 `@deepseek-ai/dsh-experimental-` 前缀。只接纳依赖图已在安装闭包里的包，在 Web 插件页一键启用（第 4、13 章）。
+- **official-bundles（`@deepseek-ai/dsh-official-bundles`）**（0.2.1-rc.2）：包 `packages/util/official-bundles`，集中导出 `PROFILE_TEMPLATES`、`OPTIONAL_BUNDLES`、`ON_DEMAND_BUNDLES`、`OFFICIAL_ON_DEMAND_CATALOG`、`RETIRED_BUNDLES` 等；此前这些符号从 `@deepseek-ai/dsh-app-boot` 导出（升级指南 `v0.2.1-rc.2/official-bundle-lists`；第 4 章）。
+- **on-demand bundle（按需安装的官方 bundle）**：`@deepseek-ai/dsh-official-bundles` 的 `ON_DEMAND_BUNDLES`（0.2.1-alpha.2 新增，列表现迁自该包）：`@deepseek-ai/dsh-subagent-claude-code` 与 `@deepseek-ai/dsh-subagent-codex`。它们不进安装依赖，插件页"官方"分组凭离线目录展示，用户打开时才按当前版本经普通 bundle 安装器下载（第 4、13 章）。
+- **optional bundle（可选 bundle）**：随 CLI 安装附带、默认关闭的 bundle，清单是 `@deepseek-ai/dsh-official-bundles` 的 `OPTIONAL_BUNDLES`（HEAD **14** 项）：个性化推荐（`personalized-recommendations`）、CUA（`cua-bundle`）、会话搜索（`session-search`）、Ralph（`ralph-bundle`）、持久终端（`terminal-bundle`）、技能徽章（`badge-skill-bundle`）、会话标题（`session-titles-bundle`）、Agent Teams（`agent-team-profile`）、语音输入（`voice-input-bundle`）、CoT 翻译（`cot-translation-bundle`）、Auto review、Inspector（`inspector-profile`）、插件市场（`plugin-market-bundle`）、Git Worktrees（`tool-worktree`）。多数包名带 `@deepseek-ai/dsh-experimental-` 前缀；推荐与 CUA 例外。只接纳依赖图已在安装闭包里的包，在 Web 插件页一键启用（第 4、13 章）。
 - **OTel（`ctx.otel`）**：0.2.1-alpha.2 新增分组 `telemetry` 中的 `@deepseek-ai/dsh-otel`（`packages/telemetry/otel`），为普通事件和会话日志提供彼此独立的上报通道工厂；产品适配器 `product-telemetry-otel` 与会话适配器 `session-telemetry-otel` 在其上保留各自的部署配置。只挂载 OTel 服务不会分配任何 provider 或传输（第 13 章）。
 
 ## P
@@ -116,8 +121,9 @@
 - **parallel**：分发模式，所有监听器并发执行（第 5 章）。
 - **Patch（补丁）**：按 `id` 整行替换条目，或 `insert` 新条目。应用顺序固定：bundle（按 `dsh.profile.bundles` 顺序）→ profile 补丁 → home 补丁 → `--patch`（第 4 章）。
 - **permission presets（权限预设）**：`ctx.permissionPresets`，把沙箱模式与审批策略捆成三档：`read-only`、`workspace-write`（默认）、`danger-full-access`；启用 Auto review 后多一档 `auto`（第 10 章）。
+- **plugin-market（插件市场）**（0.2.1-rc.2 前后）：包族 `@deepseek-ai/dsh-plugin-market`（`packages/boot/plugin-market`）、`@deepseek-ai/dsh-client-ui-plugin-market`、实验可选 bundle `plugin-market-bundle`，以及 apps 侧 `plugin-market-generator`；索引与安装入口，信任边界仍见第 10 章"插件市场的信任根"讨论（第 4、13、15 章）。
 - **plugin record（实验性插件记录）**：实验包写进会话日志、类型以 `plugin:` 为前缀的记录（`PluginRecordMap`、`appendPluginRecord()`），目录见 `docs/experimental-persistence-catalog.md`，例如 CoT 翻译的 `plugin:translator/request` / `plugin:translator/result`（第 6 章）。
-- **Profile（配置组合）**：命名的启动配方（`$DSH_HOME/profiles/<名字>/`），声明有序 bundle 列表与自己的补丁层。内置五个模板：`web`、`headless`、`sdk`、`sdk-minimal`、`acp`；`desktop` 为保留名（第 4 章）。
+- **Profile（配置组合）**：命名的启动配方（`$DSH_HOME/profiles/<名字>/`），声明有序 bundle 列表与自己的补丁层。内置五个模板：`web`、`headless`、`sdk`、`sdk-minimal`、`acp`（模板表现由 `official-bundles` 导出）；`desktop` 为保留名（第 4 章）。
 - **profile resolution generation（profile 解析代）**：profile 启动时计算一份不可变的 `RuntimeResolution` 并装入 Node 的 ESM/CommonJS 解析器，替代旧的磁盘链接；变更时整体发布一个新代，已有包的版本不在运行中替换（第 4 章）。
 - **profile-owned live configuration（profile 自有实时配置）**：设置页与配置编辑器把改动写进当前 profile 的 `cordis.patch.yml`，被更高层遮蔽的写入会被拒绝；这取代了旧的 `settings.yaml`（第 4、9 章）。
 - **Provider（Service Provider）**：接缝的实现方，如 `dsh-fs-local`、`dsh-bash-sandbox`、`dsh-llm-deepseek-api-key`。
@@ -129,7 +135,7 @@
 - **Ralph loop**：一次前台"全新 Agent"迭代工作流（`tool-ralph`），每轮是一个没有对话种子的新子会话（`docs/glossary.md`）。0.2.1-alpha.2 起 `tool-ralph` 位于 `packages/experimental/`，base 与 Web 预设不再带休眠的 Ralph 行，改由可选 bundle `ralph-bundle` 提供（第 13 章）。
 - **Remote / RemoteScope**：Typert 装饰器，把宿主方法暴露为远程 RPC；RemoteScope 按作用域解析目标后调用（第 12 章）。
 - **remote.mux**：`/api/remote.mux`（`REMOTE_STREAM_MUX_PATH`），浏览器与宿主之间唯一的流复用 WebSocket，承载 `$events` 逻辑流与双向 `RemoteStream`，每条流有入站缓冲上限 `streamInboxBytes`（第 5、11 章）。
-- **RETIRED_BUNDLES（已退役 bundle）**：`profile.ts` 中一组"早先发布过、安装中已不再携带"的 bundle 名，加载 profile 时从 `dsh.profile.bundles` 中删除并重写 `package.json`。HEAD 只有 `@deepseek-ai/dsh-experimental-schedule-bundle` 一项（第 4 章）。
+- **RETIRED_BUNDLES（已退役 bundle）**：`@deepseek-ai/dsh-official-bundles` 中一组"早先发布过、安装中已不再携带"的 bundle 名，加载 profile 时从 `dsh.profile.bundles` 中删除并重写 `package.json`。HEAD 只有 `@deepseek-ai/dsh-experimental-schedule-bundle` 一项（第 4 章）。
 - **round**：包含一个 turn 的外层策略迭代，如 goal round 或一次 Ralph 尝试（`docs/glossary.md`）。
 
 ## S
@@ -159,7 +165,8 @@
 - **TLS（`--tls-cert` / `--tls-key`）**：0.2.1-alpha.2 起 `webserver` 可以用 `node:https` 直接提供 HTTPS（`tls: { certFile, keyFile }`），两个参数必须成对给出；证书读不到、为空或与私钥不匹配都会让启动失败，不会退回 HTTP。只有监听器自己是 TLS 时，认证 Cookie 才带 `Secure`（第 11 章，附录 G）。
 - **Tool（工具）**：模型可调用的函数，经 `ctx.tools` 管线执行（`tools/pre-execute` → 审批 → guard → body → 输出投影 → `tools/post-execute` → `tools/result`）（第 8 章）。
 - **tool call three phases（工具调用三阶段）**：客户端按 callId 把一次工具调用呈现为 `preparing`（参数仍在生成）→ `start`（已派发）→ `result`，只影响 UI 呈现（第 8 章）。
-- **tool presentation mode（工具呈现方式）**：每个 Agent 只用一种调用形式：`native`（可见工具直接作为函数调用）或 `ptc`（只暴露 `run_code`，程序经生成的 SDK 调工具）。由 `@deepseek-ai/dsh-agent-tool-presentation` 按 preset 选择，环境变量 `DSH_TOOLS_MODE=native|ptc` 覆盖随附配置；0.2.1-alpha.2 起 `both` 被拒绝（第 8、11 章）。
+- **tool-executor（工具执行器插件）**（0.2.1-rc.2）：原生与 PTC 执行分别由 `@deepseek-ai/dsh-tool-executor-native`、`@deepseek-ai/dsh-tool-executor-ptc`（`packages/core/tool-executor-*`）挂载；`dsh-tools` 不再接受已删除的 `mode` / `maxParallelSubCalls` 配置字段。内置 profile 已挂载执行器；启用的执行器条目是启动必需项。Web / headless / SDK **不再读取** `DSH_TOOLS_MODE`，默认继承 base 的原生执行；切 PTC 用补丁禁用 `tool-executor-native`、启用 `tool-executor-ptc`（升级指南 `v0.2.1-rc.2/tool-executor-plugins`；第 8 章）。
+- **tool presentation mode（工具呈现方式）**：每个 Agent 只用一种调用形式：`native`（可见工具直接作为函数调用）或 `ptc`（只暴露 `run_code`）。`@deepseek-ai/dsh-agent-tool-presentation` 选择器仍受支持但已弃用；实际执行由 **tool-executor** 插件承担。0.2.1-alpha.2 起 `both` 被拒绝；0.2.1-rc.2 起环境变量 `DSH_TOOLS_MODE` 对随附 profile 无效（第 8 章）。
 - **trustedHosts**：connection 信任围栏的额外 authority 列表（CLI `--trusted-host`），0.2.1-alpha.2 起经 `webStartup` 服务传给 `connection`。Host/Origin 检查失败返回 403，它只防 DNS 重绑定与跨站请求，不确立身份（第 11 章）。
 - **Turn（轮）**：一次对已认领输入的完整排空，包含零到多个 step（`docs/glossary.md`，第 7 章）。
 - **Typert**：从编译期类型图生成 RPC 契约的系统（第 12 章）。
@@ -172,6 +179,7 @@
 
 - **waterfall**：分发模式，链式中间件，`next()` 委托或短路（第 5 章）。
 - **WebBootGraph**：宿主生成、注入到页面 `window.__DSH_BOOT__` 的启动图（`{ rev, entries, batches }`，批次分 bootstrap 与 application），客户端插件据此经 combo 请求加载（第 11 章）。
+- **web_fetch（私有目标）**（0.2.1-rc.2）：`@deepseek-ai/dsh-web-fetch-http` 不再解析主机名并以 `WEB_BLOCKED_URL` 拒绝 loopback / 私有 / link-local / 保留地址；请求经已安装的代理策略与系统解析器发出，因此可访问内网与云元数据主机。若模型不得访问私有目标，需另加网络限制、`tools/pre-execute` 策略，或移除抓取工具（升级指南 `v0.2.1-rc.2/web-fetch-private-destinations`；第 10 章，附录 G）。
 - **webStartup**：`dsh-web-app` 的 `web-startup` 行（`@deepseek-ai/dsh-web-app/startup`）解析 `dsh web` 参数后提供的服务，携带 `openBrowser`、`host`、`port`、`publicUrl`、`tls`、`trustedHosts`；`webserver`、`web-runtime`、`connection` 都从它读取部署值。0.2.1-alpha.2 起它取代了 `webRuntime` 服务上的 `trustedHosts` / `lanAddresses`（第 11 章，附录 G）。
 - **workflow（工作流）**：`ctx.workflowEngine`，模型写编排脚本、脚本中的 `agent()` 经子 Agent 扇出；执行后端 `workflow-ptc`（第 13 章）。
 - **working directory（会话工作目录）**：0.2.1-alpha.2 新增的 `ctx.workingDirectory`（`@deepseek-ai/dsh-working-directory`，`get(session)` / `ensure(agent)` / `set(agent, path)`）与模型工具 `working_directory({ cd? })`（`dsh-tool-working-directory`），`dsh-base` 全局挂载。会话头 `cwd` 仍标识**原始项目**，`working-directory/change` 事件记录**当前目录**；相对路径、新启动的进程、指令与技能发现跟随当前目录，而沙箱可写根与项目归属仍锚定原始项目。旧的 `{{cwd}}` 提示变量和子 Agent `cwd` 配置键已删除（第 6、8、13 章）。
@@ -185,7 +193,7 @@
 
 ## 已不再使用的旧术语
 
-下列词在旧版（0.1.5、0.1.7-rc.2）书稿或文档中出现过，HEAD（0.2.1-alpha.2）中已删除、改名或搬家，读旧资料时注意换算：
+下列词在旧版（0.1.5、0.1.7-rc.2、0.2.1-alpha.2）书稿或文档中出现过，HEAD（0.2.1-rc.3）中已删除、改名或搬家，读旧资料时注意换算：
 
 | 旧术语 | 现状 |
 | --- | --- |
@@ -206,6 +214,12 @@
 | `packages/hooks/*`、`packages/webhook/*` 分组，以及 `tool-terminal` / `tool-ralph` / `tool-session-query` 的旧路径 | 0.2.1-alpha.2 移入 `packages/experimental/`，**包名不变**；hooks/webhook 不再随 CLI 安装，需显式安装并组合 |
 | `apps/cli/config/examples/github-review/` | 已删除，示例改由适配器随附：`packages/experimental/webhook-github/examples/github-review/` |
 | `mode: both` / `DSH_TOOLS_MODE=both` / `ctx.tools.presentAs('both')` | 0.2.1-alpha.2 删除，只接受 `native` 或 `ptc` |
+| `DSH_TOOLS_MODE=native\|ptc` 覆盖随附 profile；`dsh-tools` 的 `mode` / `maxParallelSubCalls` | 0.2.1-rc.2 起 Web/headless/SDK 不再读 `DSH_TOOLS_MODE`；执行改由 `tool-executor-native` / `tool-executor-ptc` 插件（升级指南 `tool-executor-plugins`） |
+| 从 `@deepseek-ai/dsh-app-boot` 导入 `OPTIONAL_BUNDLES` / `ON_DEMAND_BUNDLES` / `PROFILE_TEMPLATES` 等 | 0.2.1-rc.2 迁至 `@deepseek-ai/dsh-official-bundles`（升级指南 `official-bundle-lists`） |
+| 普通 Session fork 的 `parentSession` / 客户端把 fork 当子代理缩进 | 0.2.1-rc.3 普通 fork 独立、不再写 parent；子代理看 `origin === 'subagent'`（升级指南 `independent-session-forks`） |
+| Node.js `^22.19.0 \|\| >=24.0.0` | 0.2.1-rc.2 起必须 `>=24.9.0`（升级指南 `node-24`） |
+| 仅凭 `peerDependencies` 的 `@deepseek-ai/dsh*` 判定插件兼容（忽略 `engines.dsh`） | 0.2.1-alpha.3 起优先 `engines.dsh`；拒绝记录 `peers` → `requirements` |
+| `web_fetch` 拒绝私有/loopback 目标（`WEB_BLOCKED_URL` + 固定已校验地址） | 0.2.1-rc.2 起可访问私有目标；需自行加策略限制（升级指南 `web-fetch-private-destinations`） |
 | `{{cwd}}` 提示变量、`subagent-acp` / `subagent-dsh-sdk` 的 `cwd` 配置键 | 0.2.1-alpha.2 删除，当前目录由 working directory 服务提供 |
 | `agent-instructions` 行的 `dshHome` 字段 | 0.2.1-alpha.2 删除，指令加载只跟随 `DSH_HOME` / `~/.dsh` |
 | Agent Teams 的 `maxPendingMessagesPerMember` | 0.2.1-alpha.2 删除，成员消息直接进目标 inbox |
@@ -221,21 +235,21 @@
 - 想给模型加能力 → Tool / defineTool / Capability Seam / Consumer / tool presentation mode（第 8 章 + 附录 D）
 - 想换实现 → Capability Seam / Provider / Bundle（第 8 章）
 - 想加配置层 → Profile / Patch / insert / profile-owned live configuration（第 4 章）
-- 想分发或安装插件 → Bundle / optional bundle / on-demand bundle / experimental package / compatibility.json / `dsh plugin --profile` 位置规则（第 4、14 章 + 附录 D）
+- 想分发或安装插件 → Bundle / official-bundles / optional bundle / on-demand bundle / experimental package / engines.dsh / compatibility.json / plugin-market / `dsh plugin --profile` 位置规则（第 4、14 章 + 附录 D）
 
 **架构理解**
-- 想理解加载顺序 → Bundle / Profile / Patch / `!!js` / Loader / profile resolution generation / RETIRED_BUNDLES（第 3、4 章）
+- 想理解加载顺序 → Bundle / Profile / Patch / `!!js` / Loader / profile resolution generation / RETIRED_BUNDLES / official-bundles（第 3、4 章）
 - 想理解通信 → emit / waterfall / serial / bail / parallel / scope（第 5 章）
 - 想理解会话 → Session / SessionEvent / surface / canonical envelope / session format v4 / plugin record / working directory / deriveMessages / compaction / fork（第 6 章）
 - 想理解主循环 → Turn / Step / agent-loop / Agent / activation / Agent Teams（第 7 章）
-- 想理解工具与接缝 → Tool / tool call three phases / dynamic tool updates / spill / PTC / working directory / worktree（第 8 章）
+- 想理解工具与接缝 → Tool / tool-executor / conditional tools / tool call three phases / dynamic tool updates / spill / PTC / working directory / worktree（第 8 章）
 - 想理解模型接入 → StreamChunk / credentialRef / MISSING_CREDENTIAL / no-response / CoT 翻译（第 9 章）
-- 想理解安全 → Sandbox / bwrap / Landlock / Seatbelt / enforcement / fail-closed / permission presets / approval / Auto review / BOOTSTRAP_NAMES（第 10 章）
+- 想理解安全 → Sandbox / bwrap / Landlock / Seatbelt / enforcement / fail-closed / permission presets / approval / Auto review / BOOTSTRAP_NAMES / web_fetch / CUA（第 10 章）
 - 想理解前端与部署 → WebBootGraph / API Gateway / remote.mux / 浏览器令牌认证 / listener trust / webStartup / public URL / TLS / trustedHosts / HMR / Desktop（第 11 章）
 - 想理解 RPC → Typert / Remote / RemoteScope / SRC fallback（第 12 章）
 
 **运维与调试**
-- 报错排查 → `--dump-config` / `--dump-config-schema` / startup audit / fail-loud / fatal diagnostics / SANDBOX_UNAVAILABLE / MISSING_CREDENTIAL / no-response / credentialRef / cli-help（附录 G）
+- 报错排查 → `--dump-config` / `--dump-config-schema` / startup audit / fail-loud / fatal diagnostics / SANDBOX_UNAVAILABLE / MISSING_CREDENTIAL / no-response / credentialRef / Node.js 引擎要求 / engines.dsh / cli-help（附录 G）
 - 升级 → upgrade guide / 已不再使用的旧术语（第 14 章）
 - 测试 → keyless 快照回放、质量门 `scripts/run-gates.ts`（第 14 章，未单列词条）
 - 调试工具 → Inspector / Session Inspector / OTel（第 13、14 章）
@@ -243,10 +257,10 @@
 
 **进阶能力**
 - 委派 → Agent / activation / on-demand bundle / Agent Teams / lineage / fork（第 13 章）
-- 程序化执行 → PTC / ptc-runtime / tool presentation mode / workflow / Ralph loop（第 13 章）
+- 程序化执行 → PTC / ptc-runtime / tool-executor / tool presentation mode / workflow / Ralph loop（第 13 章）
 - 目标与后台 → goal / goal round / Schedule / jobs seam（第 13 章）
-- 交付与外部世界 → deliverables / MCP / browser-use / computer-use / SSH runtime（第 13 章）
+- 交付与外部世界 → deliverables / MCP / browser-use / computer-use / CUA / SSH runtime（第 13 章）
 - 执行坐标与可观测 → working directory / worktree / OTel（第 13 章）
 - 桥接 → hooks / Claude Code mods / experimental package（第 13 章）
-- 产品扩展 → Agent preset / optional bundle / Auto review / CoT 翻译（第 13 章）
+- 产品扩展 → Agent preset / optional bundle / plugin-market / Auto review / CoT 翻译（第 13 章）
 - 多入口 → ACP / Desktop / cli-help（第 13 章）

@@ -33,12 +33,13 @@
 
 "原样"并不等于"一字不改"：`vendor/README.md` 里有一份要求**穷举**的 *Local modifications* 清单，记录每一处与上游的差异（例如 `applyEntryPatches` 的导出、Fiber 的可重入销毁加固、可恢复的文件刷新、volatile 配置等），以及从上游同步时如何重新套用这些修改。vendor 的价值恰恰在这里：**可以改，但每一处改动都有账可查**。
 
-从上一版基准 0.1.7-rc.2 到 0.2.1-alpha.2，vendor 层的变化很小，正好可以拿来看这本账怎么记：
+从上一版基准 0.2.1-alpha.2 到本版 `0.2.1-rc.3`（commit `22ddee3792`），vendor 层的变化仍然很小，正好可以拿来看这本账怎么记：
 
-- 9 个包统一发了一轮预发布版本（例如 `@deepseek-ai/cordis` 从 `4.0.4` 变为 `4.0.5-alpha.1`，`cordis-plugin-loader` 从 `1.0.5` 变为 `1.0.6-alpha.1`）；
-- 清单新增了第 23 条：`vendor/loader/src/config/entry.ts` 里的每个条目（Entry）现在保留一个 `moduleNamespace` 字段——"导出规范化之前"的原始导入结果。DSH 的 HMR 用它去和 Node 缓存的模块命名空间做匹配，热重载成功后才更新它；`loader/README.md` 也同步记录了这个新增字段。这条修改服务于 0.2.1 的"插件包刷新"（第 4 章 4.8 节）：一个包的 `package.json` 变了，HMR 要能准确找到"哪些条目加载的是这个模块"。
+- 9 个包从 alpha 预发布落到了稳定补丁号（例如 `@deepseek-ai/cordis` 为 `4.0.5`，`cordis-plugin-loader` 为 `1.0.6`；其余配套包也去掉了 `-alpha.*` 后缀）；
+- 清单第 23 条仍在：`vendor/loader/src/config/entry.ts` 里的每个条目（Entry）保留 `moduleNamespace`——"导出规范化之前"的原始导入结果。DSH 的 HMR 用它去和 Node 缓存的模块命名空间做匹配，热重载成功后才更新它；`loader/README.md` 也记录了这个字段。它服务于"插件包刷新"（第 4 章 4.8 节）：一个包的 `package.json` 变了，HMR 要能准确找到"哪些条目加载的是这个模块"；
+- 清单新增了第 24 条：`timer/locale/{en,zh}.json`，给 Settings 插件清单提供本地化标题与描述。
 
-注意它的写法：**只加字段、不改 `EntryTree.import()` 的参数和返回值**。对 vendor 代码做"增量、可描述、可重放"的修改，才能让下一次从上游同步时不至于变成一场考古。
+注意 `moduleNamespace` 的写法：**只加字段、不改 `EntryTree.import()` 的参数和返回值**。对 vendor 代码做"增量、可描述、可重放"的修改，才能让下一次从上游同步时不至于变成一场考古。运行时侧另有一条与 Cordis 无关、但和"插件能不能进树"相关的规则：从 `0.2.1-alpha.3` 起，安装与 profile 启动优先读插件 `package.json` 的 **`engines.dsh`**（没有才回退到 DSH peer），不匹配的行会被禁用——细节在第 4 章。
 
 Cordis 本身是一个通用的 Node.js 应用框架：**插件贡献服务、类型化事件、可逆副作用，共享同一个 Context**。DSH 没有另起炉灶，而是把整个产品建在它上面——理解下面五个概念，就等于理解了 DSH 的地基。官方文档对应的是 `docs/cordis-primer.md`（五个概念的速览）、`docs/cordis-tutorial/`（七章动手教程，不需要 API Key）和 `docs/cordis-api/`（从源码生成的 API 参考）。
 
@@ -235,7 +236,7 @@ sequenceDiagram
 
 条目还可以携带 `inject`、`group`（嵌套一组子条目作为一个单元）和 `isolate`（让一个 group 拥有某个服务名的独立实例）。例如 Web 应用的 `minimal` Agent 预设里，就用一个 `cordis:group` 行配 `isolate: { terminals: true }`，让这组终端插件拥有自己的 `terminals` 服务实例。没有 `id` 的条目每次读取都会生成新 id，于是文件任何一处被编辑，它都会被当作"删除 + 新增"而重新挂载——这就是 DSH 的 bundle 文件里每一行都写 `id` 的原因。
 
-加载器（`@deepseek-ai/cordis-plugin-loader`）读这份条目列表，为每条创建 fiber、等待依赖、校验配置、执行 `apply`。三个细节决定了这套机制的性格：
+加载器（`@deepseek-ai/cordis-plugin-loader`）读这份条目列表，为每条创建 fiber、等待依赖、校验配置、执行 `apply`。在 Loader 动手之前，DSH 的启动器还会按插件包的 `engines.dsh`（或回退的 DSH peer）做一轮兼容性预检：不匹配且无精确版本豁免的行，会在合成结果里被改成 `disabled: true`——Cordis 本身不读 `engines.dsh`，这是应用层加在配置树前面的闸门（第 4 章）。三个细节决定了 Cordis 侧机制的性格：
 
 **配置由 schema 在 `apply` 之前校验。** 插件导出同名的 `Config` 类型与 schemastery schema，默认值直接写在字段上：
 
@@ -342,14 +343,15 @@ corepack pnpm dsh web --patch .\my-patch.yml
 3. `inject` 让框架推导加载顺序，而一个 `inject` 了不存在服务的插件会安静地停在 PENDING。为什么 Cordis 选择"安静等待"而不是"启动时报错"？DSH 又是在哪一层把"必需插件没激活"变成启动失败的？
 4. Loader 从"事务式重载"退回"非事务式"。站在一个正在编辑 profile 补丁的用户的角度，这两种语义各自给他什么体验？你认为"自动回滚"值得那么多额外的生命周期代码吗？
 5. 运行时不变量服务（`ctx.invariants`）被整体移除后，四个凭据/授权/模型适配器相关的 emit 改为"捕获并记录监听器失败"。为什么一个"观察型"事件不应该让监听器的异常传回生产者？如果你确实需要"某个检查失败就让操作失败"，应该用哪种分发模式来表达？
+6. 插件包的 `engines.dsh` 由 app-boot 在 Loader 之前检查，Cordis 并不认识这个字段。把"宿主兼容性"放在应用层而不是框架层，换来了什么、又失去了什么？
 
 ## 小结
 
-- DSH 不自己写插件框架，而是以源码形式 vendor 了 Cordis 及其 8 个配套包，所有本地修改都在 `vendor/README.md` 里记账（0.2.x 新增的一条是 Loader 条目保留 `moduleNamespace`，供 HMR 识别模块身份）；
+- DSH 不自己写插件框架，而是以源码形式 vendor 了 Cordis 及其 8 个配套包，所有本地修改都在 `vendor/README.md` 里记账（第 23 条是 Loader 条目的 `moduleNamespace`，第 24 条是 timer 的 locale 元数据）；到 `0.2.1-rc.3` 时 vendor 包号已从 alpha 落到稳定补丁；
 - 五个概念：插件（三种形态）、Context、inject、类型化事件（五种分发模式）、可逆副作用；每个插件实例由一个 Fiber 承载，PENDING 是合法状态；
 - 能力即服务：DSH 的产品功能是一张服务表；不再需要的能力（如 0.2.1 移除的运行时不变量服务）删掉插件行即可退场；
 - 可逆副作用是插件化的灵魂：销毁逆序启动、异步销毁并发执行，顺序敏感的清理放进同一个 effect；
-- 配置即开关：条目 + schema 校验；volatile 字段可以不重启就更新；`!!js` 只在 `config` 与 `disabled` 中求值；
+- 配置即开关：条目 + schema 校验；volatile 字段可以不重启就更新；`!!js` 只在 `config` 与 `disabled` 中求值；进入 Loader 之前，应用层还会按 `engines.dsh`（或 DSH peer）预检兼容性；
 - Loader 是非事务式的：失败不回滚，由应用层审计激活结果并大声报错。
 
 下一章看配置的完整形态：Profile、Bundle、补丁——这几层如何叠出一台具体的 DSH，以及它们现在如何被 Web 界面直接编辑。

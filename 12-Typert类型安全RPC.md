@@ -7,7 +7,7 @@
 > - 设计：为什么是编译期类型图、为什么模型要"与编译器无关"、为什么输入只在宿主校验
 > - 动手：改一个 Remote 方法名感受构建期报错，用声明映射从调用跳到实现
 
-> **版本说明**：本章按 0.2.1-alpha.2 核对（上一版基准 0.1.7-rc.2）。`packages/typert/` 在这段时间只有小幅修正（`git log 477b4f4205..HEAD -- packages/typert` 共 18 个提交，近半是合并与发版提交）：生成器缓存了按文件的注册与路径规范化、发射类声明时剔除 `#private` 成员与 `static {}` 块、把 SVG / PNG / JPEG / WebP 资源导出与 JSON / YAML 一样排除在 API 模型之外；四个包都没有、也从未发布运行时不变式伴生插件，README 里相应的说明随 `remove-runtime-invariants` 一并删掉。网关侧新增了 `hasLiveClient()`，`api-remotes` 挂载的贡献多了产品分析与用户提问两个命名空间。**本章的设计叙述全部仍然成立。**
+> **版本说明**：本章按 **0.2.1-rc.3**（源码 commit `22ddee3792`）核对；上一版书稿基准为 0.2.1-alpha.2。"类型图 → 契约"、Host-only 校验、SRC 回退、`hasLiveClient()` 等骨架仍成立。相对 alpha.2，`packages/typert/` 有实质增量：Remote 可声明触及的 **资源**（`TypertResourceMap` + `@Remote({ resources })`），非 owner 调用由 `@deepseek-ai/dsh-api-remote-access` 判定；消费方可对同一方法选择普通 / 严格输入视图（`method.input({ strict })`）；`./remote` 产物统一为惰性的 `TypertRemoteInfo`（`createTypertRemoteInfo`）；`PeerScope.principal` 承载调用方身份。生成器侧还有默认资源 resolver、工具 schema 投影与构建输出护栏等。
 
 ## 12.1 先问"为什么"：前后端类型安全的痛点
 
@@ -28,7 +28,7 @@
 | `dsh-typert-loader` | 包挂载时把其生成的反射与 schema 工厂贡献进注册表，卸载时撤回 |
 | `dsh-typert-registry` | 宿主侧 `ctx.typert`：放置描述符、schema，持有 lookup 与 Context 提供者 |
 
-网关本身在 `packages/api/`：`@deepseek-ai/dsh-api-gateway` 提供宿主侧 `ctx.typertGateway` 和客户端侧 `ctx.remote`；`@deepseek-ai/dsh-api-remotes` 负责显式选择并挂载哪些 Remote 贡献；Agent/Session 的 lookup 策略归 `@deepseek-ai/dsh-api-session-controller`。
+网关本身在 `packages/api/`：`@deepseek-ai/dsh-api-gateway` 提供宿主侧 `ctx.typertGateway` 和客户端侧 `ctx.remote`；`@deepseek-ai/dsh-api-remotes` 负责显式选择并挂载哪些 Remote 贡献；Agent/Session 的 lookup 策略归 `@deepseek-ai/dsh-api-session-controller`；非 owner 调用的资源访问判定归 `@deepseek-ai/dsh-api-remote-access`。
 
 ## 12.2 设计思考：为什么是"编译期类型图"而不是"运行时反射"？
 
@@ -60,16 +60,21 @@ export class GoalService extends TypertRemoteService {
 每个要点都在回答一个设计问题：
 
 - **显式绑定**：服务继承 `TypertRemoteService`；如果已有别的基类，就声明 `readonly typertRemote = bindTypertRemote(this, serviceKey)`。两种方式都留下可检查的公开绑定，**不依赖编译器往构造函数里偷偷注入符号**；
-- `@Remote('create')`：把 `createForClient` 暴露为远程方法 `goals.create`——**方法名和远程名解耦**；
+- `@Remote('create')`：把 `createForClient` 暴露为远程方法 `goals.create`——**方法名和远程名解耦**（也可用无参 `@Remote`，远程名取方法名）；
 - **对象不过线**：`Agent` 通过 `TypertLookupMap` 声明映射，线上只有 `agentId` 字段，网关在宿主侧把 id 解析回真实对象——**线路上只有 id，对象永远留在宿主**；
 - **取消是协议的一部分**：可选的最后一个 `signal: AbortSignal` 参数不进线上参数列表，由载体的取消信号驱动；
-- `@RemoteScope('agent', 'current')`：先通过 `ctx.typert.contexts` 把身份解析成作用域 Context，再从中取服务调用——适合依赖会话级组合、不需要显式接收 `Agent` 的方法。
+- `@RemoteScope('agent', 'current')`：先通过 `ctx.typert.contexts` 把身份解析成作用域 Context，再从中取服务调用——适合依赖会话级组合、不需要显式接收 `Agent` 的方法；
+- **资源与访问**：`@Remote` / `@RemoteScope` 的选项只有 `name`、`mode` 与可选的 `resources` 读取函数——**输入严格程度不写在装饰器上**，由消费方选择（见下）。`TypertResourceMap` 与 lookup 并列：领域包声明资源种类（如 `session`、`workspace`），运行时经 `typert.resources.register(kind, { field } | { resolve })` 给出默认提取规则；方法未声明且默认规则也读不到时触及内置 `{ kind: 'global' }`。非 owner 能否调用由 `dsh-api-remote-access` 判定；owner 身份不经 wire，由 `PeerScope.principal` 固定（内置 `owner: { kind: 'owner' }`）。
 
-严格规则也要记住：Remote 必须是**公开、非静态、非泛型的实例方法**；参数必须是必填的简单命名标识符，**不能解构、默认值、rest 或可选参数**。普通 JSON 可表示的类型生成严格 schema；复杂对象必须有唯一的 `TypertLookupMap` 声明。
+严格规则也要记住：Remote 必须是**公开、非静态、非泛型的实例方法**；参数必须是必填的简单命名标识符，**不能解构、默认值、rest 或可选参数**。普通 JSON 可表示的类型生成 codec；复杂对象必须有唯一的 `TypertLookupMap` 声明。
+
+### 输入严格度：消费方选择，而不是注解
+
+生成的 `./remote` 把 `TYPERT_REMOTE` 导出为 `TypertRemoteInfo`：`methods[endpoint]` 与 `descriptors` 共享同一描述符对象，并带 `input(options?)` 与 `invoke(...)`。`method.input()` / `{ strict: false }` 是 Host 分发的普通视图——已声明对象**接受并剥离**未知字段；`method.input({ strict: true })` 递归**拒绝**未声明字段（显式 JSON 与字典键仍开放）。两种视图各自惰性缓存；这不改变 Host 网关的分发路径。独立消费方可用协议包的 `createTypertRemoteInfo(spec, z)` 在无 Cordis 导入下构建同一形状。
 
 ### 流式方法
 
-`@Remote({ mode: 'stream' })` 标记返回 `Iterable`、`AsyncIterable` 或 `RemoteStream<Out, In>` 的方法。网关把每个产出项通过 `/api/remote.mux` 多路复用 WebSocket（或进程内载体）送达，生成的客户端方法返回 `RemoteStreamHandle<Out, In>`：可迭代下行项，也能 `send` / `end` / `dispose`。第二个类型参数 `In` 声明上行项类型；上行项来自浏览器，网关会**用生成的 `In` codec 逐项校验**，宿主方法再通过 `this.ctx.invocation.uplink<In>()` 读取。上行数据既不进 `args`，也不进参数列表。
+`@Remote({ mode: 'stream' })` 标记返回 `Iterable`、`AsyncIterable` 或 `RemoteStream<Out, In>` 的方法。网关把每个产出项通过 `/api/remote.mux` 多路复用 WebSocket（或进程内载体）送达，生成的客户端方法返回 `RemoteStreamHandle<Out, In>`：可迭代下行项，也能 `send` / `end` / `dispose`。第二个类型参数 `In` 声明上行项类型；上行项来自浏览器，网关会**用生成的 `In` codec 逐项校验**，宿主方法再通过 `this.ctx.invocation.uplink<In>()` 读取。上行数据既不进 `args`，也不进参数列表。`RemoteInvocation` 还给出 `service`、`peer`（含 principal）与载体 `signal`。
 
 ## 12.4 生成器：一个与编译器无关的模型
 
@@ -191,10 +196,10 @@ Typert 的定位很明确：**为 TS 全栈的复杂对象映射而生**。它�
 
 在 deepseek-harness 根目录的 Windows PowerShell 中执行。
 
-1. **找真实方法**：`rg -l "@Remote\b" packages -g "*.ts" -g "!*.spec.ts" -g "!**/tests/**"`，挑 3 个读它们的参数、lookup 与 `mode`。当前约有三十个源文件（其中 `packages/extensions/tool-cordis/src/api-catalog.ts` 是生成的 API 目录文本，不算真实声明）；注意除了带名字的 `@Remote('create')`，也有不带参数的裸装饰器写法，例如实验包 `client-ui-cot-translation` 里的 `@Remote async translate(...)`。
-2. **读身份策略**：打开 `packages/api/session-controller` 的 README，找到"复用存活 Agent、冷恢复、去重、子 agent 栅栏"的描述。
+1. **找真实方法**：`rg -l "@Remote\b" packages -g "*.ts" -g "!*.spec.ts" -g "!**/tests/**"`，挑 3 个读它们的参数、lookup、`mode` 与可选的 `resources`。HEAD 上约有三十九个匹配源文件（其中 `packages/extensions/tool-cordis/src/api-catalog.ts` 是生成的 API 目录文本，不算真实声明）；注意除了带名字的 `@Remote('create')`，也有裸装饰器写法，例如实验包 `client-ui-cot-translation` 里的 `@Remote async translate(...)`。
+2. **读身份与访问策略**：打开 `packages/api/session-controller` 的 README（复用存活 Agent、冷恢复、去重、子 agent 栅栏），再扫一眼 `packages/api/remote-access` 与协议包 README 里 `TypertResourceMap` / `principalOf` 一节。
 3. **感受构建期报错**：给某个 Remote 方法的参数加一个默认值（例如 `request: X = {}`），运行 `corepack pnpm run build:lib`，观察生成器拒绝；改回后再构建。
-4. **看产物**：构建后打开任一贡献包的 `lib/typert.remote-client.d.ts`，看生成的客户端签名；在编辑器里对 `ctx.remote.<ns>.<method>` 调用"跳转到定义"，确认借助 `.d.ts.map` 落到宿主源码。
+4. **看产物**：构建后打开任一贡献包的 `lib/typert.remote-client.d.ts`，确认 `TYPERT_REMOTE` 为 `TypertRemoteInfo`、方法上有 `input`；在编辑器里对 `ctx.remote.<ns>.<method>` 调用"跳转到定义"，确认借助 `.d.ts.map` 落到宿主源码。
 5. **看宿主校验**：`corepack pnpm dsh web` 并登录后，在浏览器 DevTools 里观察一次 `POST api/<ns>/<method>` 请求的 `args` 结构。
 
 ## 12.11 常见坑
@@ -211,16 +216,17 @@ Typert 的定位很明确：**为 TS 全栈的复杂对象映射而生**。它�
 
 1. "客户端只信构建产物"换来了确定性。如果插件要在运行时动态添加一个 Remote 方法，Typert 支持吗？SRC 回退能解决这个问题吗？为什么客户端仍然拒绝 SRC 描述符？
 2. lookup 把 `Agent` 映射成 `agentId`。如果方法需要传"一组 agent"呢？严格分析要求复杂对象有唯一的 `TypertLookupMap` 声明，这种"复杂对象过线"的问题，本质上是序列化的什么问题？
-3. 输入校验从"两端都做"改为"只在宿主做"。请列出这个决定的收益与代价；"未声明的属性先经过载体、到宿主才被剔除"会不会成为安全问题？调用方应该怎么防范？
+3. 输入校验从"两端都做"改为"只在宿主做"。请列出这个决定的收益与代价；"未声明的属性先经过载体、到宿主才被剔除"会不会成为安全问题？调用方应该怎么防范？与 `method.input({ strict: true })` 的关系是什么？
 4. 生成器被重构为"分析 → 无 AST 的模型 → 发射"。如果要新增一种产物（比如为某个外部协议生成描述文件），在旧架构与新架构下分别要改哪些地方？
 5. 0.2 的生成器在发射类声明时剔除 `#private` 成员与 `static {}` 块，并把图片等资源导出排除在 API 模型之外。如果不剔除，会对"客户端只信构建产物"的确定性和公开 API 的边界造成什么影响？
+6. 为什么把"这个方法触及哪些资源"写进 Typert（`resources` / 默认 resolver），而不是只在 Gateway 或业务代码里硬编码检查？遗漏一个资源会怎样？（提示：访问控制从不检查被遗漏的资源；`global` 不等于"任意会话"）
 
 ## 小结
 
 - Typert = 编译期类型图 → RPC 契约（宿主 Zod codec + 客户端声明与贡献），契约不需要单独声明；
-- `@Remote` / `@RemoteScope` 声明，显式服务绑定（`TypertRemoteService` / `bindTypertRemote`），lookup 把宿主对象映射成线上 id，`mode: 'stream'` 支持双向 `RemoteStream`；
-- 生成器以 Host 聚合为唯一种子，经无 AST 的 `FaceModel` / `TypeGraph` 发射产物，兼做构建期类型检查（根构建中诊断交给 `tsc -b`）；只收录公开成员与真正的代码导出；产物带声明映射，可从调用跳到实现；
-- 输入只在宿主校验，失败统一为 `RemoteError`，`gateway/*` 码与业务码原样上线；
+- `@Remote` / `@RemoteScope` 声明，显式服务绑定（`TypertRemoteService` / `bindTypertRemote`），lookup 把宿主对象映射成线上 id，`resources` + `TypertResourceMap` 声明触及资源，`mode: 'stream'` 支持双向 `RemoteStream`；
+- 生成器以 Host 聚合为唯一种子，经无 AST 的 `FaceModel` / `TypeGraph` 发射产物；`./remote` 为惰性 `TypertRemoteInfo`，输入严格度由消费方选择；产物带声明映射，可从调用跳到实现；
+- 输入只在宿主校验，失败统一为 `RemoteError`，`gateway/*` 码与业务码原样上线；非 owner 访问由 `dsh-api-remote-access` 判定；
 - 客户端只信构建产物；源码模式有 SRC 回退：开发时能跑，发布时严格。
 
 下一章：进阶能力与生态——子 Agent、技能、工作流、外部协议，以及"让模型改自己运行时"的危险玩具。

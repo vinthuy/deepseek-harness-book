@@ -1,6 +1,6 @@
 # 附录 G 故障排查手册：从症状到根因
 
-> 第 14 章给了"三板斧"方法论（配置 → 日志 → 源码），这个附录是它的速查版：**症状 → 可能原因 → 排查命令 → 修复**。表中带引号的报错文字都取自 HEAD（0.2.1-alpha.2）源码或仓库的升级指南（`docs/upgrade-guide/`），`<...>` 表示会被替换的部分；命令默认在 deepseek-harness 根目录的 PowerShell 中执行。遇到问题先查这里，再按三板斧深入。从上一版基准 0.1.7-rc.2 升级上来、旧 profile 突然起不来时，先看 G.2.1。
+> 第 14 章给了"三板斧"方法论（配置 → 日志 → 源码），这个附录是它的速查版：**症状 → 可能原因 → 排查命令 → 修复**。表中带引号的报错文字都取自 HEAD（`0.2.1-rc.3`，commit `22ddee3792`）源码或仓库的升级指南（`docs/upgrade-guide/`），`<...>` 表示会被替换的部分；命令默认在 deepseek-harness 根目录的 PowerShell 中执行。遇到问题先查这里，再按三板斧深入。从 `0.2.1-alpha.2`（或更早）升级上来、旧 profile 突然起不来时，先看 G.2.1；Node 版本、fork 兼容性与 `web_fetch` 私有目标见新增行与 G.2.2。
 
 ## G.1 排查方法论：四句话
 
@@ -30,7 +30,10 @@ flowchart TD
 | `dsh: warning: <N> entries did not activate`，条目后跟 `pending (waiting for service: <名字>)` | 非必需条目的 `inject` 服务没人提供（包名/服务名拼错、提供方行被禁用） | `--dump-config` 查提供方那一行；第 3 章 Fiber 的 PENDING 状态 | 修正 `inject` 或补上提供方；其余插件照常运行 |
 | 同上，但条目后是一段错误堆栈，或 `failed to import`、`disabled expression failed` | 插件 `apply` 抛错；模块路径/导出不对；`disabled: !!js ...` 表达式本身抛错 | 看堆栈里的第一个插件帧 | 修插件代码、`main`/`exports`，或修表达式 |
 | `dsh: skipping profile bundle "<包名>": <原因>` | bundle 解析失败、清单损坏、补丁文件读不到，或 `peerDependencies` 里的 dsh 版本范围不覆盖当前运行时 | 原因文字；`dsh plugin --profile <名字> version-exemptions` 查看已登记的豁免 | 更新 peer 范围，或用 `dsh plugin --profile <名字> allow-version <包>@<版本> --dsh-version <精确版本> --accept-risk` 在 profile 的 `compatibility.json` 登记"精确包版本 × 精确 dsh 版本"豁免（附录 D） |
-| 启动时 `dsh: disabling profile plugin row "<id>": Plugin <包>@<版本> is incompatible with dsh 0.2.1-alpha.2: peerDependencies {...}. Running it may cause crashes or data loss. ...`（bundle 则是 `dsh: skipping profile bundle "<包名>": Plugin ...`），末尾是 `Exact-version exemption: not active.`；`dsh plugin add` 安装前也会给出同样的文字 | 第三方插件的 peer 写的是 `^0.1.x` 一类范围。版本比较用 `semver.satisfies(..., { includePrerelease: true })`，`^0.1.0` 不覆盖 0.2.x，预发布版本也照样参与比较 | 插件 `package.json` 的 `peerDependencies` 里以 `@deepseek-ai/dsh` 开头的项；`dsh plugin --profile <名字> version-exemptions` | 首选升级插件或把 peer 改成覆盖 0.2.x 的范围；确认要冒险时，`dsh plugin --profile <名字> allow-version <包>@<版本> --dsh-version 0.2.1-alpha.2 --accept-risk`。豁免只对这一个包版本 × 这一个 dsh 版本有效，升级 dsh 后要重新评估 |
+| 启动时 `dsh: disabling profile plugin row "<id>": Plugin <包>@<版本> is incompatible with dsh 0.2.1-rc.3: ...`（bundle 则是 `dsh: skipping profile bundle "<包名>": Plugin ...`），末尾是 `Exact-version exemption: not active.`；`dsh plugin add` 安装前也会给出同样的文字 | **优先**看包的 `engines.dsh`（有则忽略 DSH peer）；缺省才用 `peerDependencies` 里以 `@deepseek-ai/dsh` 开头的项。版本比较用 `semver.satisfies(..., { includePrerelease: true })`；`engines.dsh` 里写 `workspace:` 视为不兼容；拒绝记录字段为 `requirements`（不再是 `peers`） | 插件 `package.json` 的 `engines.dsh` 与 peer；`dsh plugin --profile <名字> version-exemptions` | 首选升级插件或把 `engines.dsh` / peer 改成覆盖当前 dsh 的范围；确认要冒险时，`dsh plugin --profile <名字> allow-version <包>@<版本> --dsh-version 0.2.1-rc.3 --accept-risk`。豁免只对这一个包版本 × 这一个 dsh 版本有效（升级指南 `plugin-engines-dsh`） |
+| `node` / 安装报引擎不符，或源码启动异常、提示需要更新 Node | 根 `engines.node` 现为 **`>=24.9.0`**；Node 22（含旧口径 `^22.19.0`）已不支持 | `node --version` | 升级本机 / CI / 容器的 Node 到 24.9 或更高；Desktop 与 Python SDK 内置运行时自带，不受影响（升级指南 `node-24`） |
+| 启动失败，抱怨缺少 `tool-executor-native` / `tool-executor-ptc`，或 `dsh-tools` 拒绝 `mode` / `maxParallelSubCalls` | 自定义组合未挂载执行器插件；仍在用已删除的 tools 执行配置；或仍依赖 `DSH_TOOLS_MODE` | `--dump-config \| Select-String tool-executor`；环境变量是否还设了 `DSH_TOOLS_MODE` | 按升级指南 `tool-executor-plugins` 挂载其一；切 PTC 用补丁禁用 native、启用 ptc；移除 `DSH_TOOLS_MODE` |
+| 从 `@deepseek-ai/dsh-app-boot` 导入 `OPTIONAL_BUNDLES` 等编译/加载失败 | 列表已迁到 `@deepseek-ai/dsh-official-bundles` | 导入路径 | 改导入源（升级指南 `official-bundle-lists`） |
 | 端口被占，`dsh web` 起不来（`webserver` 出现在 `Failed plugins` 里） | 上一个实例没退 / 别的程序占了 3080（Desktop 用系统分配的空闲端口，不会撞固定端口） | `Get-NetTCPConnection -LocalPort 3080` → 找 PID | `Stop-Process -Id <pid>`，或 `corepack pnpm dsh web --port 3081`（`--port 0` 让系统挑一个空闲端口） |
 | `error: --port must be a number, got "<值>"` | `--port` 后面跟的不是纯数字 | — | 改成数字；`0` 表示由系统分配 |
 | `dsh: failed to parse overlay <文件>` / `overlay <文件> must be a top-level YAML array of loader patch entries`（profile 自己的补丁报 `patches`） | 补丁 YAML 语法错，或顶层不是条目数组 | 用编辑器校验 YAML | 补丁文件顶层必须是 `- id: ...` 列表 |
@@ -47,9 +50,9 @@ flowchart TD
 | `error: --public-url must be an absolute http or https URL ...` / `must not include a query or fragment (? or #)` / `must not include credentials ...` | `--public-url` 只接受 `http(s)://host[/prefix]` 形式的根地址 | — | 去掉查询串、片段和用户名密码，只保留协议、主机和路径前缀 |
 | `'pnpm' 不是内部或外部命令` | 没有全局 pnpm，构建脚本内部调了裸 pnpm | `Get-Command pnpm` | 用 `corepack pnpm run build`，或逐个执行 `corepack pnpm run build:lib`、`corepack pnpm run build:web`（第 2.4 节） |
 
-### G.2.1 从 0.1.7-rc.2 升级后的启动问题
+### G.2.1 从旧版本升级后的启动问题
 
-上一版基准 0.1.7-rc.2 → 0.2.1-alpha.2 之间删除、迁移、改名了一批包和配置项。仓库在 `docs/upgrade-guide/<升级前的版本>/<主题>/guide.zh.md` 为每一项写了迁移步骤，下表只列最常见的症状。
+从 `0.1.7-rc.2` / `0.2.1-alpha.2` 升到 `0.2.1-rc.3` 之间删除、迁移、改名了一批包和配置项。仓库在 `docs/upgrade-guide/<升级前的版本>/<主题>/guide.zh.md` 为每一项写了迁移步骤，下表只列最常见的症状（alpha.2 之前的项仍适用；rc.2/rc.3 新增项见 G.2.2）。
 
 | 症状 | 可能原因 | 排查 | 修复 |
 | --- | --- | --- | --- |
@@ -62,6 +65,16 @@ flowchart TD
 | 设置 `DSH_TOOLS_MODE=both` 或 `mode: both` 后配置加载失败 | 工具呈现方式只接受 `native` 或 `ptc`，混合的 `both` 被拒绝 | — | 改成 `native` 或 `ptc`；需要按 preset 区分时改该 preset 的 `@deepseek-ai/dsh-agent-tool-presentation` 行（升级指南 `tool-presentation-mode`） |
 | `agent-instructions` 行的 `dshHome` 不再生效，指令文件读的是另一个 home | `dshHome` 字段已移除，残留的键被忽略；指令加载始终用 `$DSH_HOME`（未设置时 `~/.dsh`） | `--dump-config` 看 `agent-instructions` 行 | 删掉 `dshHome`，改为在进程环境里设置 `DSH_HOME`（升级指南 `instruction-home-override`） |
 | 子 Agent 委派不再直接返回结果或 Job 编号，`run_in_background` 参数和 `backgroundMode` / `enableRunInBackground` 配置不再起作用 | 子 Agent 统一为 activation 模型：每次委派返回 `{ kind: 'activation', subagentId }`，结果通过完成通知交付；`@deepseek-ai/dsh-subagent-in-process-driver` 已删除 | `--dump-config` 看 `tool-subagent` 行 | 删掉这些配置键；宿主代码改用 `ctx.subagents.startActivation()`（升级指南 `subagent-activations`） |
+| 设置 `DSH_TOOLS_MODE` 不再切换原生/PTC，或自定义组合缺执行器起不来 | 0.2.1-rc.2 起随附 profile 不再读该环境变量；执行改由 `tool-executor-*` 插件 | `--dump-config \| Select-String tool-executor` | 见 G.2 表与升级指南 `tool-executor-plugins` |
+
+### G.2.2 0.2.1-rc.2 / rc.3：Node、fork、web_fetch
+
+| 症状 | 可能原因 | 排查 | 修复 |
+| --- | --- | --- | --- |
+| CI / 本机安装在 Node 22 上失败 | 引擎要求已改为 `>=24.9.0` | `node --version`；根 `package.json` 的 `engines.node` | 升级到 Node 24.9+（升级指南 `v0.2.1-rc.2/node-24`） |
+| 新 fork 的会话打不开，报 `current-generation delivery marker names the wrong Session` 一类错误 | 共享 Session 目录里仍有**旧 reader**；普通 fork 现无 `parentSession`，旧 V4 reader 可能把带继承投递确认的无父 fork 当成损坏日志拒绝 | 各入口（Web / Desktop / headless / SDK / ACP）是否都已升到含 `independent-session-forks` 的版本 | **先升级全部 reader/writer** 再恢复新 fork；不要手改 header 或删投递记录绕过（升级指南 `v0.2.1-rc.3/independent-session-forks`） |
+| 代码把"有 `parentSession`"当成子代理；普通 fork 仍出现在 `subagent.started` 或被缩进 | 旧假设失效：普通 fork 不再写 parent；子代理看 `origin === 'subagent'` | 会话头与 `origin` 字段 | 替换检查条件；确认普通 fork 不触发 `subagent.started` |
+| 模型用 `web_fetch` 打到了内网 / loopback / 云元数据，或依赖旧默认挡板的部署被穿透 | 0.2.1-rc.2 起 HTTP 抓取**不再**以 `WEB_BLOCKED_URL` 拒绝私有目标 | 是否仍假设默认 SSRF 防护；`HttpFetchProvider` 是否还传了已删除的 resolver | 限制进程网络、在 `tools/pre-execute` 拒绝相关 URL，或移除 `@deepseek-ai/dsh-tool-web` 抓取工具；构造函数只接受 limits（升级指南 `web-fetch-private-destinations`） |
 
 > 启动诊断日志是原始 `util.inspect` 输出，文件开头就写着 `WARNING: Raw diagnostics may contain configuration or credential values from plugin errors. Review before sharing.`——分享给别人之前先检查一遍。
 
@@ -97,7 +110,7 @@ flowchart TD
 | 症状 | 可能原因 | 排查 | 修复 |
 | --- | --- | --- | --- |
 | 会话找不到 / 历史"消失" | 用的不是同一个 Harness home：`DSH_HOME` 不同；`dev:desktop` 默认使用隔离的 `apps/desktop/.desktop-build/development/home` | `$env:DSH_HOME`；会话目录 `$DSH_HOME/sessions/--<cwd>--/<id>/` | 统一 `DSH_HOME` |
-| 旧会话打开时被拒绝 | v3 规范信封与原生 v4 关系校验：读侧遇到不规范或关系矛盾的记录**拒绝而不修复**（第 6.5 节） | 报错里的事件位置；是否手工改过日志 | 别手工编辑日志；旧代际文件永不被覆盖，可以回到上一代文件确认；从正常边界 fork 新会话 |
+| 旧会话打开时被拒绝 | v3 规范信封与原生 v4 关系校验：读侧遇到不规范或关系矛盾的记录**拒绝而不修复**（第 6.5 节）；或混用新旧 fork 语义的 reader（见 G.2.2） | 报错里的事件位置；是否手工改过日志；各入口版本是否一致 | 别手工编辑日志；旧代际文件永不被覆盖，可以回到上一代文件确认；从正常边界 fork 新会话前先统一升级 |
 | 恢复后最后一轮显示为中断 | 未收尾的 turn 在恢复时以 `interrupted` 原因闭合；有调用没结果的工具调用由 `dsh-session` 补一条 `TOOL_OUTCOME_UNKNOWN` 结果，**不自动重试** | 会话日志末尾 | 这是设计：让模型或用户决定是否重做 |
 | 搜索会话报 `SESSION_QUERY_SEARCH_DISABLED` | `dsh-base` 默认 `session-query-sqlite` 的 `openAt: never`，只做精确读取 | `--dump-config \| Select-String -Context 0,4 session-query-sqlite` | 在 profile 补丁里改 `openAt: first-search`（或 `startup`）并给一个持久 `path`；或启用随附的可选 bundle `session-search`，它自带一份隔离的内存索引和 `tool-session-query` 工具，每次启动后的首次搜索要重建索引（附录 F.2） |
 | 归档会话失败，报 `workspace/session-active` | 会话仍有运行中的工作（自己的 turn、子 Agent、后台任务或定时任务），归档被拒且没有写入 | 错误里的 `activity` 列出要先停的东西 | 先停掉这些工作；或以 `stopActivity: true` 发起归档，由控制器先请求停止再归档 |
@@ -167,5 +180,6 @@ flowchart TD
 
 - 排查顺序：配置（`--dump-config` / `--dump-config-schema`）→ 启动审计（`did not activate`、`skipping profile bundle`、`Full diagnostics`）→ 会话事实流 → 源码；
 - Web 的 401 和 403 是两道不同的门：403 问"从哪来"（信任围栏），401 问"是谁"（令牌 Cookie）；
-- 大部分 Agent 特有故障，根因在"契约没遵守"（取消信号、凭据路径、`.env` 能设什么）或"配置没对齐"（补丁整行替换、peer 范围、`openAt`）；
+- 大部分 Agent 特有故障，根因在"契约没遵守"（取消信号、凭据路径、`.env` 能设什么）或"配置没对齐"（补丁整行替换、`engines.dsh` / peer 范围、`openAt`、tool-executor 挂载）；
+- 升级到 rc.3 时优先核对三件事：**Node >=24.9**、**普通 fork 独立化（共享目录 reader 全升）**、**`web_fetch` 不再默认挡私有目标**；
 - 安全相关的失败一律 fail-closed（`SANDBOX_UNAVAILABLE`、检查点写失败），崩溃一律 fail-loud——看到它们时，先别想着绕过，先想"它在保护什么"。
