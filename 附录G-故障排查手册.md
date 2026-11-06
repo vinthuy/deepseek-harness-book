@@ -1,6 +1,6 @@
 # 附录 G 故障排查手册：从症状到根因
 
-> 第 14 章给了"三板斧"方法论（配置 → 日志 → 源码），这个附录是它的速查版：**症状 → 可能原因 → 排查命令 → 修复**。表中带引号的报错文字都取自 HEAD（`0.2.1-rc.3`，commit `22ddee3792`）源码或仓库的升级指南（`docs/upgrade-guide/`），`<...>` 表示会被替换的部分；命令默认在 deepseek-harness 根目录的 PowerShell 中执行。遇到问题先查这里，再按三板斧深入。从 `0.2.1-alpha.2`（或更早）升级上来、旧 profile 突然起不来时，先看 G.2.1；Node 版本、fork 兼容性与 `web_fetch` 私有目标见新增行与 G.2.2。
+> 第 14 章给了"三板斧"方法论（配置 → 日志 → 源码），这个附录是它的速查版：**症状 → 可能原因 → 排查命令 → 修复**。表中带引号的报错文字都取自 HEAD（`0.2.2-rc.1`，commit `fcc0ad4621`）源码或仓库的升级指南（`docs/upgrade-guide/`），`<...>` 表示会被替换的部分；命令默认在 deepseek-harness 根目录的 PowerShell 中执行。遇到问题先查这里，再按三板斧深入。从 `0.2.1-rc.3`（或更早）升级上来、旧 profile 突然起不来时，先看 G.2.1；Node / fork / `web_fetch` 见 G.2.2；搜索默认、observation、Schedule Host API、Forge / Team 见 G.2.3。
 
 ## G.1 排查方法论：四句话
 
@@ -30,7 +30,7 @@ flowchart TD
 | `dsh: warning: <N> entries did not activate`，条目后跟 `pending (waiting for service: <名字>)` | 非必需条目的 `inject` 服务没人提供（包名/服务名拼错、提供方行被禁用） | `--dump-config` 查提供方那一行；第 3 章 Fiber 的 PENDING 状态 | 修正 `inject` 或补上提供方；其余插件照常运行 |
 | 同上，但条目后是一段错误堆栈，或 `failed to import`、`disabled expression failed` | 插件 `apply` 抛错；模块路径/导出不对；`disabled: !!js ...` 表达式本身抛错 | 看堆栈里的第一个插件帧 | 修插件代码、`main`/`exports`，或修表达式 |
 | `dsh: skipping profile bundle "<包名>": <原因>` | bundle 解析失败、清单损坏、补丁文件读不到，或 `peerDependencies` 里的 dsh 版本范围不覆盖当前运行时 | 原因文字；`dsh plugin --profile <名字> version-exemptions` 查看已登记的豁免 | 更新 peer 范围，或用 `dsh plugin --profile <名字> allow-version <包>@<版本> --dsh-version <精确版本> --accept-risk` 在 profile 的 `compatibility.json` 登记"精确包版本 × 精确 dsh 版本"豁免（附录 D） |
-| 启动时 `dsh: disabling profile plugin row "<id>": Plugin <包>@<版本> is incompatible with dsh 0.2.1-rc.3: ...`（bundle 则是 `dsh: skipping profile bundle "<包名>": Plugin ...`），末尾是 `Exact-version exemption: not active.`；`dsh plugin add` 安装前也会给出同样的文字 | **优先**看包的 `engines.dsh`（有则忽略 DSH peer）；缺省才用 `peerDependencies` 里以 `@deepseek-ai/dsh` 开头的项。版本比较用 `semver.satisfies(..., { includePrerelease: true })`；`engines.dsh` 里写 `workspace:` 视为不兼容；拒绝记录字段为 `requirements`（不再是 `peers`） | 插件 `package.json` 的 `engines.dsh` 与 peer；`dsh plugin --profile <名字> version-exemptions` | 首选升级插件或把 `engines.dsh` / peer 改成覆盖当前 dsh 的范围；确认要冒险时，`dsh plugin --profile <名字> allow-version <包>@<版本> --dsh-version 0.2.1-rc.3 --accept-risk`。豁免只对这一个包版本 × 这一个 dsh 版本有效（升级指南 `plugin-engines-dsh`） |
+| 启动时 `dsh: disabling profile plugin row "<id>": Plugin <包>@<版本> is incompatible with dsh 0.2.2-rc.1: ...`（bundle 则是 `dsh: skipping profile bundle "<包名>": Plugin ...`），末尾是 `Exact-version exemption: not active.`；`dsh plugin add` 安装前也会给出同样的文字 | **优先**看包的 `engines.dsh`（有则忽略 DSH peer）；缺省才用 `peerDependencies` 里以 `@deepseek-ai/dsh` 开头的项。版本比较用 `semver.satisfies(..., { includePrerelease: true })`；`engines.dsh` 里写 `workspace:` 视为不兼容；拒绝记录字段为 `requirements`（不再是 `peers`） | 插件 `package.json` 的 `engines.dsh` 与 peer；`dsh plugin --profile <名字> version-exemptions` | 首选升级插件或把 `engines.dsh` / peer 改成覆盖当前 dsh 的范围；确认要冒险时，`dsh plugin --profile <名字> allow-version <包>@<版本> --dsh-version 0.2.2-rc.1 --accept-risk`。豁免只对这一个包版本 × 这一个 dsh 版本有效（升级指南 `plugin-engines-dsh`） |
 | `node` / 安装报引擎不符，或源码启动异常、提示需要更新 Node | 根 `engines.node` 现为 **`>=24.9.0`**；Node 22（含旧口径 `^22.19.0`）已不支持 | `node --version` | 升级本机 / CI / 容器的 Node 到 24.9 或更高；Desktop 与 Python SDK 内置运行时自带，不受影响（升级指南 `node-24`） |
 | 启动失败，抱怨缺少 `tool-executor-native` / `tool-executor-ptc`，或 `dsh-tools` 拒绝 `mode` / `maxParallelSubCalls` | 自定义组合未挂载执行器插件；仍在用已删除的 tools 执行配置；或仍依赖 `DSH_TOOLS_MODE` | `--dump-config \| Select-String tool-executor`；环境变量是否还设了 `DSH_TOOLS_MODE` | 按升级指南 `tool-executor-plugins` 挂载其一；切 PTC 用补丁禁用 native、启用 ptc；移除 `DSH_TOOLS_MODE` |
 | 从 `@deepseek-ai/dsh-app-boot` 导入 `OPTIONAL_BUNDLES` 等编译/加载失败 | 列表已迁到 `@deepseek-ai/dsh-official-bundles` | 导入路径 | 改导入源（升级指南 `official-bundle-lists`） |
@@ -52,7 +52,7 @@ flowchart TD
 
 ### G.2.1 从旧版本升级后的启动问题
 
-从 `0.1.7-rc.2` / `0.2.1-alpha.2` 升到 `0.2.1-rc.3` 之间删除、迁移、改名了一批包和配置项。仓库在 `docs/upgrade-guide/<升级前的版本>/<主题>/guide.zh.md` 为每一项写了迁移步骤，下表只列最常见的症状（alpha.2 之前的项仍适用；rc.2/rc.3 新增项见 G.2.2）。
+从 `0.1.7-rc.2` / `0.2.1-alpha.2` / `0.2.1-rc.3` 升到 `0.2.2-rc.1` 之间删除、迁移、改名了一批包和配置项。仓库在 `docs/upgrade-guide/<升级前的版本>/<主题>/guide.zh.md` 为每一项写了迁移步骤，下表只列最常见的症状（alpha.2 之前的项仍适用；rc.2/rc.3 见 G.2.2；0.2.2 搜索 / observation / Schedule / Forge / Team 见 G.2.3）。
 
 | 症状 | 可能原因 | 排查 | 修复 |
 | --- | --- | --- | --- |
@@ -75,6 +75,17 @@ flowchart TD
 | 新 fork 的会话打不开，报 `current-generation delivery marker names the wrong Session` 一类错误 | 共享 Session 目录里仍有**旧 reader**；普通 fork 现无 `parentSession`，旧 V4 reader 可能把带继承投递确认的无父 fork 当成损坏日志拒绝 | 各入口（Web / Desktop / headless / SDK / ACP）是否都已升到含 `independent-session-forks` 的版本 | **先升级全部 reader/writer** 再恢复新 fork；不要手改 header 或删投递记录绕过（升级指南 `v0.2.1-rc.3/independent-session-forks`） |
 | 代码把"有 `parentSession`"当成子代理；普通 fork 仍出现在 `subagent.started` 或被缩进 | 旧假设失效：普通 fork 不再写 parent；子代理看 `origin === 'subagent'` | 会话头与 `origin` 字段 | 替换检查条件；确认普通 fork 不触发 `subagent.started` |
 | 模型用 `web_fetch` 打到了内网 / loopback / 云元数据，或依赖旧默认挡板的部署被穿透 | 0.2.1-rc.2 起 HTTP 抓取**不再**以 `WEB_BLOCKED_URL` 拒绝私有目标 | 是否仍假设默认 SSRF 防护；`HttpFetchProvider` 是否还传了已删除的 resolver | 限制进程网络、在 `tools/pre-execute` 拒绝相关 URL，或移除 `@deepseek-ai/dsh-tool-web` 抓取工具；构造函数只接受 limits（升级指南 `web-fetch-private-destinations`） |
+
+### G.2.3 0.2.2：搜索默认、observation、Schedule、Forge / Team
+
+| 症状 | 可能原因 | 排查 | 修复 |
+| --- | --- | --- | --- |
+| 启动报找不到 `@deepseek-ai/dsh-web-search-exa` / `@deepseek-ai/dsh-web-search-perplexity`，或设置页仍钉着 `exa` / `perplexity` 导致搜索失败 | 0.2.2-alpha.2 起这两个可选搜索包**已移除**；提供方 id 不再对应实现 | `--dump-config \| Select-String searchProvider, web-search`；profile 补丁与 `dsh.profile.bundles` | 删除对应条目与 `EXA_API_KEY` / `PERPLEXITY_API_KEY`（若不再使用）；把 `searchProvider` 设为 `deepseek-search-api`（默认）或 `deepseek-official`（旧 Messages 搜索），或删掉该字段（升级指南 `web-search-default-provider`） |
+| 搜索计费或行为与预期不符（不再走模型 Messages / 出现 Search API 费用） | base 默认已改为 `deepseek-search-api`（DeepSeek Search API），不再默认 `deepseek-official` | 设置 → 网页搜索提供方；`--dump-config` 看 `web` 行的 `searchProvider` | 需要旧 Messages 搜索时显式选「DeepSeek（旧版）」/ `deepseek-official`；凭据模式见升级指南 `web-search-credential-modes` |
+| `write` / `edit` 不再因未先读而失败；录制期望里的 `FS_NOT_OBSERVED` / `FS_STALE_VERSION` 对不上 | `fs-observation-policy` 行现以 `disabled: true` 交付 | `--dump-config \| Select-String fs-observation-policy` | 要恢复写前先读：在 profile 的 `cordis.patch.yml` 写 `- id: fs-observation-policy` + `disabled: false`（升级指南 `fs-observation-policy-default-off`） |
+| 模型仍调用 `schedule_update` / `schedule_delete`，或按 Session 的旧 delete/update API 找不到 | Schedule 工具改为宿主范围的 `schedule_create` / `list` / `view` / `edit`（RRULE + `target`） | 工具列表与升级指南 `schedule-agent-tools` | 改提示词 / skill / 脚本；原生与 Remote 改用统一 Host API（`schedule-remote-host-tasks`） |
+| 插件页找不到独立的「Git 工作树」卡片，或同时开了 Forge 与 worktree 后控件只读 | Forge 统一入口「变更请求与工作树」；独立 `tool-worktree` 进 `HIDDEN_BUNDLES`；两者同时选会重复 id | profile 的 `dsh.profile.bundles` | 只保留 `@deepseek-ai/dsh-experimental-forge-bundle` 或只保留隐藏的 worktree 包，不要两者同选（升级指南 `forge-worktree-entry`） |
+| `/team on` / `/team off` 无效；或 `agent-team-profile` 从 bundles 列表消失 | 斜杠命令已删；可选 Team profile 已进 `RETIRED_BUNDLES`，Team 改由 base 挂载 | 根会话菜单「使用智能体团队」；`--dump-config \| Select-String agent-team` | 用会话菜单开关；确认 base 已挂 `agent-team` / `tool-agent-team`（升级指南 `team-mode-menu`） |
 
 > 启动诊断日志是原始 `util.inspect` 输出，文件开头就写着 `WARNING: Raw diagnostics may contain configuration or credential values from plugin errors. Review before sharing.`——分享给别人之前先检查一遍。
 
@@ -181,5 +192,5 @@ flowchart TD
 - 排查顺序：配置（`--dump-config` / `--dump-config-schema`）→ 启动审计（`did not activate`、`skipping profile bundle`、`Full diagnostics`）→ 会话事实流 → 源码；
 - Web 的 401 和 403 是两道不同的门：403 问"从哪来"（信任围栏），401 问"是谁"（令牌 Cookie）；
 - 大部分 Agent 特有故障，根因在"契约没遵守"（取消信号、凭据路径、`.env` 能设什么）或"配置没对齐"（补丁整行替换、`engines.dsh` / peer 范围、`openAt`、tool-executor 挂载）；
-- 升级到 rc.3 时优先核对三件事：**Node >=24.9**、**普通 fork 独立化（共享目录 reader 全升）**、**`web_fetch` 不再默认挡私有目标**；
+- 升级到 0.2.2-rc.1 时优先核对：**Node >=24.9**、**普通 fork 独立化（共享目录 reader 全升）**、**`web_fetch` 不再默认挡私有目标**、**搜索默认 DeepSeek Search API（Exa/Perplexity 已移除）**、**observation 默认关闭**、**Schedule 宿主 API / 工具改名**、**Forge 统一入口与 Team 进 base**；
 - 安全相关的失败一律 fail-closed（`SANDBOX_UNAVAILABLE`、检查点写失败），崩溃一律 fail-loud——看到它们时，先别想着绕过，先想"它在保护什么"。

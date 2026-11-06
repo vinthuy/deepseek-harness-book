@@ -3,7 +3,7 @@
 > 从零开始理解并动手使用 DeepSeek Harness（DSH）——一个"一切皆插件"的 Agent 运行时与框架。
 > 这本书不仅是教程，更是一次对现代 Coding Agent 系统的设计解剖：它为什么长这样、它解决了什么、代价是什么、未来会走向哪里。
 
-本书基于 `deepseek-ai/deepseek-harness` 源码撰写，版本基准 **`0.2.1-rc.3`**（源码 commit `22ddee3792`；`packages/*/*` 下 52 个分组、363 个包；含 vendor/native/apps/benchmarks/website/python 约 386 个 workspace 包）。相对上一版基准 `0.2.1-alpha.2`，本版按最新源码逐章更新：Node 要求升为 `>=24.9.0`、官方 bundle 列表独立为 `dsh-official-bundles`、工具执行器可挂载插件、条件工具与 step admission、普通 Session fork 独立化、插件 `engines.dsh` 优先、插件市场 / CUA 等 experimental 能力，以及 `apps` 增至 5 个（含 `plugin-market-generator`）。更早的 `0.1.7-rc.2 → 0.2.1-alpha.2` 变化（hooks/webhook 迁入 experimental、runtime invariants 移除、会话工作目录、OTel、公开部署监听信任等）与 `0.1.5-rc.2 → 0.1.7-rc.2`（E2B 移除、SSH、账号登录、PTC、会话格式 v4）保留在各章。目标读者是：
+本书基于 `deepseek-ai/deepseek-harness` 源码撰写，版本基准 **`0.2.2-rc.1`**（源码 commit `fcc0ad4621`；`packages/*/*` 下 **53** 个非空分组、**370** 个包，含新增 **`team`** 分组；含 vendor/native/apps/benchmarks/website/python 约 **393** 个 workspace 包）。相对上一版基准 `0.2.1-rc.3`，本版按最新源码逐章更新：Web 搜索默认改为 DeepSeek Search API（可选的 Exa / Perplexity 提供方已移除）、`OPTIONAL_BUNDLES` 增至 **15**（含 `@deepseek-ai/dsh-experimental-forge-bundle`；liveshare 为 `@deepseek-ai/dsh-experimental-liveshare`）、另有 on-demand 的 claude-code / codex 子代理组合包、Forge / Schedule / team projection 等能力，以及 experimental 约 **61** 个包。更早的 `0.2.1-alpha.2 → 0.2.1-rc.3`（Node `>=24.9.0`、官方 bundle 列表、工具执行器可挂载、Session fork 独立化、`engines.dsh` 优先、`apps` 含 `plugin-market-generator` 等）、`0.1.7-rc.2 → 0.2.1-alpha.2` 与 `0.1.5-rc.2 → 0.1.7-rc.2` 的变化保留在各章。目标读者是：
 
 - 听说过 Agent Harness、想弄明白它和"模型/API/Agent 框架"有什么区别的开发者；
 - 想在本地跑起 DSH、读懂它的插件机制并开始写自己插件的工程师；

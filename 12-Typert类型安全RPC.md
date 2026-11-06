@@ -7,7 +7,7 @@
 > - 设计：为什么是编译期类型图、为什么模型要"与编译器无关"、为什么输入只在宿主校验
 > - 动手：改一个 Remote 方法名感受构建期报错，用声明映射从调用跳到实现
 
-> **版本说明**：本章按 **0.2.1-rc.3**（源码 commit `22ddee3792`）核对；上一版书稿基准为 0.2.1-alpha.2。"类型图 → 契约"、Host-only 校验、SRC 回退、`hasLiveClient()` 等骨架仍成立。相对 alpha.2，`packages/typert/` 有实质增量：Remote 可声明触及的 **资源**（`TypertResourceMap` + `@Remote({ resources })`），非 owner 调用由 `@deepseek-ai/dsh-api-remote-access` 判定；消费方可对同一方法选择普通 / 严格输入视图（`method.input({ strict })`）；`./remote` 产物统一为惰性的 `TypertRemoteInfo`（`createTypertRemoteInfo`）；`PeerScope.principal` 承载调用方身份。生成器侧还有默认资源 resolver、工具 schema 投影与构建输出护栏等。
+> **版本说明**：本章按 **0.2.2-rc.1**（源码 commit `fcc0ad4621`）核对；上一版书稿基准为 0.2.1-rc.3（`22ddee3792`）。"类型图 → 契约"、Host-only 校验、SRC 回退、`resources` / `TypertRemoteInfo` / `method.input({ strict })`、`PeerScope.principal`、`hasLiveClient()` 等骨架相对 rc.3 **无破坏性变更**（`packages/typert/*` 仅包版本号 bump）。业务侧 Remote 方法数量随新包增加（HEAD 上 `@Remote` 匹配源文件约四十五个），协议形状不变。
 
 ## 12.1 先问"为什么"：前后端类型安全的痛点
 
@@ -196,7 +196,7 @@ Typert 的定位很明确：**为 TS 全栈的复杂对象映射而生**。它�
 
 在 deepseek-harness 根目录的 Windows PowerShell 中执行。
 
-1. **找真实方法**：`rg -l "@Remote\b" packages -g "*.ts" -g "!*.spec.ts" -g "!**/tests/**"`，挑 3 个读它们的参数、lookup、`mode` 与可选的 `resources`。HEAD 上约有三十九个匹配源文件（其中 `packages/extensions/tool-cordis/src/api-catalog.ts` 是生成的 API 目录文本，不算真实声明）；注意除了带名字的 `@Remote('create')`，也有裸装饰器写法，例如实验包 `client-ui-cot-translation` 里的 `@Remote async translate(...)`。
+1. **找真实方法**：`rg -l "@Remote\b" packages -g "*.ts" -g "!*.spec.ts" -g "!**/tests/**"`，挑 3 个读它们的参数、lookup、`mode` 与可选的 `resources`。HEAD 上约有四十五个匹配源文件（其中 `packages/extensions/tool-cordis/src/api-catalog.ts` 是生成的 API 目录文本，不算真实声明）；注意除了带名字的 `@Remote('create')`，也有裸装饰器写法，例如实验包 `client-ui-cot-translation` 里的 `@Remote async translate(...)`。
 2. **读身份与访问策略**：打开 `packages/api/session-controller` 的 README（复用存活 Agent、冷恢复、去重、子 agent 栅栏），再扫一眼 `packages/api/remote-access` 与协议包 README 里 `TypertResourceMap` / `principalOf` 一节。
 3. **感受构建期报错**：给某个 Remote 方法的参数加一个默认值（例如 `request: X = {}`），运行 `corepack pnpm run build:lib`，观察生成器拒绝；改回后再构建。
 4. **看产物**：构建后打开任一贡献包的 `lib/typert.remote-client.d.ts`，确认 `TYPERT_REMOTE` 为 `TypertRemoteInfo`、方法上有 `input`；在编辑器里对 `ctx.remote.<ns>.<method>` 调用"跳转到定义"，确认借助 `.d.ts.map` 落到宿主源码。

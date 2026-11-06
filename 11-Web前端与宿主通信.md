@@ -3,11 +3,11 @@
 > 到这里，我们一直在看宿主这一侧。这一章看另一半：浏览器里的 Web UI 怎么和宿主通信，Desktop 又是怎么"包"住它的。DSH 在这里有一个反直觉的设计——**前端本身也是插件**。理解它，你就理解了 DSH"一切皆插件"贯彻到底的决心。
 
 > **本章你将学到**：
-> - 概念：webServer / connection / clientModules / API Gateway、启动图 `__DSH_BOOT__`、按 Peer 的首页注入、双向远程流、`webStartup` 与对外发布参数、Desktop 外壳、文件拖放与凭据遮挡
-> - 设计：为什么"前端也是插件"、为什么要浏览器令牌认证、为什么路由要"相对文档"、为什么对外发布要"点名"而不是 `0.0.0.0`、为什么 index 注入要带 Peer
+> - 概念：webServer / connection / clientModules / API Gateway、启动图 `__DSH_BOOT__`、按 Peer 的首页注入、双向远程流、`webStartup` 与对外发布参数、Desktop 外壳、右键菜单与会话头部菜单、文件动作（下载 / 另存为）、文件拖放与凭据遮挡
+> - 设计：为什么"前端也是插件"、为什么要浏览器令牌认证、为什么路由要"相对文档"、为什么对外发布要"点名"而不是 `0.0.0.0`、为什么 index 注入要带 Peer、为什么 Web 只有「下载」而 Desktop 才有「另存为」
 > - 动手：用令牌换 Cookie、抓启动图与 combo bundle、绑定具体地址与原生 HTTPS
 
-> **版本说明**：本章按 **0.2.1-rc.3**（源码 commit `22ddee3792`）核对；上一版书稿基准为 0.2.1-alpha.2。"前端也是插件"、启动图、双向流与对外发布（具体地址 / TLS / `--public-url` / `webStartup`）骨架未变。本轮前端相关增量：首页注入按 **Peer** 计算（升级指南 `webserver-index-peer`）；Web 默认挂上文件拖放（`ui-file-drag`）与凭据显示遮挡（`ui-secret-mask`）；可选的自定义插件索引 UI 见第 13 章。
+> **版本说明**：本章按 **0.2.2-rc.1**（源码 commit `fcc0ad4621`）核对；上一版书稿基准为 0.2.1-rc.3（`22ddee3792`）。"前端也是插件"、启动图、双向流、按 Peer 的首页注入与对外发布骨架未变。本轮前端相关增量：默认 Web 组合挂上右键菜单（`ui-context-menu`）与文件动作（`ui-file-actions`）——Web 侧只有「下载」、Desktop 另有「另存为」（升级指南 `web-file-downloads`、`session-header-menu`）；菜单定位改为 CSS 锚点（`css-anchored-menus`）；目标类型改名 `ContextMenuTarget`（`context-menu-target`）。文件拖放与凭据遮挡仍默认挂载；Forge / Liveshare 等可选 UI 见第 13 章。
 
 > **先分清目录**：`apps/web` 是 Web 应用入口（包 `@deepseek-ai/dsh-web-frontend`，对 `@deepseek-ai/dsh-client-web` 外壳库做 Vite 构建，产物由 `dsh web` 提供）；前端插件散布在 `packages/client/*`；Desktop 是 `apps/desktop`（Electron）+ `apps/desktop-host`。而 `packages/web/*` **不是前端**——那是 Agent 的网页搜索/抓取工具（`tool-web`、`web-fetch-http`、`web-search-deepseek` 等）。
 
@@ -236,8 +236,11 @@ flowchart LR
 它们都是"前端也是插件"的样板：
 
 - **侧栏浏览器** `@deepseek-ai/dsh-client-ui-sidebar-browser`（`packages/client/ui-sidebar-browser`）：右侧栏的 `browser` 标签页。在 Web 上是带 `sandbox` 属性的 iframe，在 Desktop 上是 `<webview>`；只接受 http/https 地址。
-- **插件管理页** `packages/client/ui-plugin-manager`：侧栏入口，后端服务是 `packages/boot/plugin-manager`，与 `dsh plugin` 命令共用。引导式安装先 `inspect`（对注册表名通过 `pnpm view` 查询），安装失败或取消时恢复 `package.json` 与 `pnpm-lock.yaml`；注册表按 `registry` → `fallbackRegistries`（默认含 npmmirror）依次尝试，私有注册表不会回落到公共注册表，失败时由 `failedAt` 指明卡在哪一步。不少实验能力（CoT 翻译、自定义插件索引等）以可选 bundle 出现在这个页面的 **官方** 分组里，开关即增删一个 profile 层；**持久终端**组合包仍在 `OPTIONAL_BUNDLES` 里，但插件页不再展示开关——改走 profile 的 `dsh.profile.bundles`（升级指南 `persistent-terminal-controls`，第 13 章）。
+- **插件管理页** `packages/client/ui-plugin-manager`：侧栏入口，后端服务是 `packages/boot/plugin-manager`，与 `dsh plugin` 命令共用。引导式安装先 `inspect`（对注册表名通过 `pnpm view` 查询），安装失败或取消时恢复 `package.json` 与 `pnpm-lock.yaml`；注册表按 `registry` → `fallbackRegistries`（默认含 npmmirror）依次尝试，私有注册表不会回落到公共注册表，失败时由 `failedAt` 指明卡在哪一步。不少实验能力（Forge「变更请求与工作树」、自定义插件索引、Liveshare 等）以可选 bundle 出现在这个页面的 **官方** 分组里，开关即增删一个 profile 层；**持久终端**组合包仍在 `OPTIONAL_BUNDLES` 里，但插件页不再展示开关——改走 profile 的 `dsh.profile.bundles`（升级指南 `persistent-terminal-controls`，第 13 章）。独立的「Git 工作树」卡片已隐藏，改由 Forge 统一入口（升级指南 `forge-worktree-entry`）。
 - **会话日志上传开关** `@deepseek-ai/dsh-client-ui-settings-session-log`：在 **设置 → 通用** 版本号上方放一个开关，编辑宿主插件 `session-log-deepseek` 的 `enabled` 字段（第 9 章的 `dsh_session_log`）。它只在宿主暴露该设置时出现，只读客户端改不了；保存失败保留已接受的值并弹出 Toast。一个小插件 = 一个设置项，正是这一章想说明的粒度。
+- **右键菜单与会话头部菜单** `@deepseek-ai/dsh-client-ui-context-menu`（`packages/client/ui-context-menu`）：Web 默认组合挂载，提供 `ctx.contextMenus`。贡献方用 `register({ id, target, order, resolve })` 往会话行、工作区、文件、图片、链接等目标挂操作，不必各自实现弹出层；省略号按钮走共享 factory `contextMenu.button`。目标联合类型是 `ContextMenuTarget`（由 `ContextMenuTargetMap` 声明合并派生；旧名 `MenuTarget` 已删除，升级指南 `context-menu-target`）。`ui-conversation` 把 Session Header 末尾的「更多」按钮接到同一套菜单：声明 `sessionHeader` 目标 `{ sessionId }`，导出 / 在应用中打开等操作各自注册提供者——**没有提供者时按钮隐藏**；去掉导出插件也不会带走其他头部操作（升级指南 `session-header-menu`）。会话日志导出的下载弹窗挂在根级 `shell.overlay`，标明正在导出的 Session，切换 Session 后仍显示，可并行排队、按发起顺序逐个展示。
+- **CSS 锚定的 Menu**：`@deepseek-ai/dsh-client-ui-primitives` 的 `Menu` 用 `anchorRef`（外部触发元素）或 `anchorPoint`（指针坐标）走 **CSS Anchor Positioning**，不再提供 `useAnchoredPosition` / `getAnchorRect`（升级指南 `css-anchored-menus`）。portal 菜单跟随锚点；尺寸约束用布局视口。自定义 Client UI 若还在量矩形，要改成锚点名或上述 prop。
+- **文件动作** `@deepseek-ai/dsh-client-ui-file-actions`（`packages/client/ui-file-actions`）：Web / Desktop 默认组合挂载，注入 `fileActions`。`save(source, mode)` 对原始 URL / 授权 Session 读取保持字节不变；图片复制转成可粘贴 PNG。**Web 的 `canSaveAs` 恒为 false**，菜单只有「下载」（`mode: 'download'`），成功只表示浏览器已开始下载（`requested`），**不报告本机路径**；`save(..., 'saveAs')` 会在读来源前拒绝。「另存为」与完成后的绝对路径 `path`（再经 `session.openWorkspacePath` 在文件夹显示）只在 Desktop（升级指南 `web-file-downloads`）。文件名 / MIME 规则与文件拖放共用。
 - **文件拖放** `@deepseek-ai/dsh-client-ui-file-drag`（`packages/client/ui-file-drag`，共享命名与原生传输在 `packages/util/file-drag`）：Web / Desktop 默认组合挂载。消费方注入 `fileDrag`，把 `ctx.fileDrag.actions` 传给图片 Factory / Markdown 图片委托 / `ChatViewInjected`（升级指南 `file-drag-callbacks`）。`prepare` 准备 Blob 或 URL 内容与可选 Session 资源地址；应用内令牌 `application/x-dsh-file` 只在本实例的输入框范围解析；失败提示走插件词典，源面板关掉后仍可见。Desktop 可经授权借用源文件做原生拖出。
 - **凭据显示遮挡** `@deepseek-ai/dsh-client-ui-secret-mask`（`packages/client/ui-secret-mask`）：Web 默认组合挂载。已发送用户文本里可识别的 API 密钥、令牌、JWT、私钥块、URL 密码等做**显示遮挡**（多数格式保留前八字符，其余为 `*`）；原文、复制与模型输入不变。交互消息每段末尾有眼睛控件，可单值显隐。
 
@@ -266,6 +269,7 @@ curl.exe -s -c dsh-cookie.txt -L "http://127.0.0.1:3080/?token=<token>" | Select
 5. **看门禁**：阅读 `.agents/notes/archived/architecture/2026-09-17-web-feature-routes-and-route-gate.md`（0.2 归档），再在任一客户端插件源码里找一处 `*_ROUTE` 的用法。
 6. **通配地址被拒**：`corepack pnpm dsh --profile web --host 0.0.0.0 --no-open`，确认启动前就报错；再换成本机某个具体的局域网 IPv4（`Get-NetIPAddress -AddressFamily IPv4` 可查），确认能启动、终端出现明文 HTTP 警告，并且同一台机器上用这个 IP 访问能通过围栏（仍需令牌）。
 7. **（可选）原生 HTTPS**：用你已有的证书与私钥执行 `corepack pnpm dsh --profile web --tls-cert <链.pem> --tls-key <私钥.pem>`，换完 Cookie 后在 DevTools → Application → Cookies 里确认它带了 `Secure`；故意给一个不匹配的私钥，确认启动失败而不是退回 HTTP。
+8. **文件动作与头部菜单**：在浏览器里打开一个带附件或图片的会话，右键确认只有「下载」没有「另存为」；打开 Session Header 的「更多」，导出一份日志后切换到另一个 Session，确认下载弹窗仍在根 overlay 上排队显示。再读 `packages/client/ui-file-actions/README.zh.md` 与升级指南 `web-file-downloads`、`session-header-menu`。
 
 ## 11.11 常见坑
 
@@ -275,6 +279,9 @@ curl.exe -s -c dsh-cookie.txt -L "http://127.0.0.1:3080/?token=<token>" | Select
 - **以为 `--public-url` 会放行该域名**：它只是"广告"，不授予信任；浏览器用的 authority 必须出现在 `--trusted-host` 里，否则所有 API 调用 403；
 - **在非回环地址上跑明文 HTTP**：启动令牌与会话 Cookie 都会明文过网；用 `--tls-cert` / `--tls-key` 或 HTTPS 反向代理，并把端口限制在可信网络；
 - **自定义 overlay 还在 `inject: [webRuntime]`**：该服务已不存在，改为 `webStartup`，并删掉对 `ctx.webRuntime.lanAddresses` 的引用；
+- **自定义 Web 组合缺 `ui-context-menu`**：`session-log-export` 等客户端操作依赖 `contextMenus`；默认 Web 已挂，自制组合要补上（升级指南 `session-header-menu`）；
+- **在 Web 上调用 `fileActions.save(..., 'saveAs')` 或报告本机路径**：Web 只有 `download`；`canSaveAs` 为 false，另存为只在 Desktop；
+- **还在用 `useAnchoredPosition` / `Menu.getAnchorRect` / `MenuTarget`**：已改为 CSS 锚点与 `ContextMenuTarget`（升级指南 `css-anchored-menus`、`context-menu-target`）；
 - **改动客户端包后没构建**：combo bundle 是构建产物，开发时用 `corepack pnpm run dev:web`；
 - **把敏感能力做成无校验的远程方法**：输入校验与权限判断都在宿主端（第 12 章的 Host-only 校验）；
 - **在 webServer 里直接塞业务逻辑**：业务走 connection / clientModules / Gateway 或你自己的插件；
@@ -289,6 +296,7 @@ curl.exe -s -c dsh-cookie.txt -L "http://127.0.0.1:3080/?token=<token>" | Select
 5. `--public-url` 被刻意设计成"只广告、不授信"，`Secure` 属性也只看监听器自己的协议、不看 `X-Forwarded-Proto`。如果反过来让它们从声明或转发头推导，攻击者能利用什么？代价又是什么（提示：HTTPS 代理 + HTTP 上游时 Cookie 要由谁改写）？
 6. `renderIndex(html, peer)` 为什么要把 Peer 传进首页注入？如果一律用 owner 快照，非 owner 页面会出什么问题？（提示：remote-access 快照、第 12 章的资源访问）
 7. `ui-secret-mask` 只改显示、不改原文与模型输入。它防的是哪一类泄露？防不了哪一类？（提示：屏幕共享 / 截图 vs 复制、日志、模型上下文）
+8. Web 文件动作只提供「下载」、Desktop 才有「另存为」并返回 `path`。这样拆的安全与产品边界是什么？如果 Web 也假装知道本机保存路径，会出现什么误导？（提示：升级指南 `web-file-downloads`、浏览器下载归属）
 
 ## 小结
 
@@ -298,6 +306,6 @@ curl.exe -s -c dsh-cookie.txt -L "http://127.0.0.1:3080/?token=<token>" | Select
 - 安全：Host/Origin 围栏（403，接受回环、绑定 IP 与 `trustedHosts`）+ 启动令牌换 authority 绑定 Cookie（401，TLS 下带 `Secure`）；通配地址一律拒绝；
 - 对外发布：`--host` 点名接口、`--trusted-host` 放行 authority、`--tls-cert/--tls-key` 加密、`--public-url` 只做广告；组合层由 `webStartup` 服务传递这些参数；
 - 路由相对文档（`<base href="./">` + `*_ROUTE`）并由门禁维持；
-- Desktop = Electron 外壳 + 私有 Host（`127.0.0.1`、系统分配端口）运行完整 Web 组合，附带 primary runtime 与可安装的 `dsh` 命令；产品分析只在 Desktop；侧栏浏览器、插件管理页、会话日志开关、文件拖放与凭据遮挡都是客户端插件。
+- Desktop = Electron 外壳 + 私有 Host（`127.0.0.1`、系统分配端口）运行完整 Web 组合，附带 primary runtime 与可安装的 `dsh` 命令；产品分析只在 Desktop；侧栏浏览器、插件管理页、会话日志开关、右键 / 头部菜单、文件动作（Web 下载 / Desktop 另存为）、文件拖放与凭据遮挡都是客户端插件；Menu 用 CSS 锚点定位。
 
 下一章：Typert——一个 `@Remote` 装饰器，怎么同时产出宿主实现、客户端类型和校验？

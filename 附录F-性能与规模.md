@@ -1,6 +1,6 @@
 # 附录 F 性能与规模：Agent 系统在什么量级下会慢
 
-> 前面章节讨论"怎么工作"，这个附录讨论"工作得多快、能撑多大"。Agent 系统的性能问题和传统 Web 服务不同——瓶颈往往不在请求数，而在**日志体积、上下文组装、执行环境开销、模型往返**。本附录的数字全部来自 HEAD（`0.2.1-rc.3`，commit `22ddee3792`）的源码常量、仓库级性能门 `benchmarks/` 及其设计笔记（`.agents/notes/` 下，路径省略该前缀）；凡是笔记里标明"只在某台参考机上测得"的数字，这里也照样标明。运行与测量环境要求 Node.js **`>=24.9.0`**（升级指南 `node-24`）。
+> 前面章节讨论"怎么工作"，这个附录讨论"工作得多快、能撑多大"。Agent 系统的性能问题和传统 Web 服务不同——瓶颈往往不在请求数，而在**日志体积、上下文组装、执行环境开销、模型往返**。本附录的数字全部来自 HEAD（`0.2.2-rc.1`，commit `fcc0ad4621`）的源码常量、仓库级性能门 `benchmarks/` 及其设计笔记（`.agents/notes/` 下，路径省略该前缀）；凡是笔记里标明"只在某台参考机上测得"的数字，这里也照样标明。运行与测量环境要求 Node.js **`>=24.9.0`**（升级指南 `node-24`）。
 
 ## F.1 事件溯源日志：最大的"慢"来源
 
@@ -135,9 +135,9 @@ flowchart LR
 - **上下文组装**：`deriveMessages()` 带增量缓存，投影单元结果深冻结。`agent-continuation` 性能门的剖析曾发现，请求历史操作的大半时间花在请求构建里反复 `deepFreeze` 已经冻结过的历史上。这个优化后来落地了（`archived/simplification/2026-09-06-agent-request-freeze-evidence.md`）：每个循环用一个 `WeakSet<Message>` 记住已冻结的消息（`packages/core/agent-loop/src/agent.ts`），参考机（M4 Pro）上请求历史的中位数从 246.1 ms 降到 66.7 ms（−72.9%）。托管 CI 上的请求历史预算是 297 ms（238 × 1.25 向下取整）。
 - **监听器纪律**：第 5 章说过，监听器在主路径上，重活要移到 `ctx.jobs`。后台任务完成时以会话内通知唤醒拥有它的 Agent，**无需轮询**（第 7、13 章）。
 
-## F.6 启动与构建：约 386 个包的冷启动
+## F.6 启动与构建：约 393 个包的冷启动
 
-DSH workspace 合计约 **386** 个包（其中 `packages/*/*` 下约 **363** 个包、**52** 个非空分组；另有 apps、vendor、native、benchmarks、website、python/sdk-runtime 等）。相对书稿上一基准（0.2.1-alpha.2 时约 353 / 331）明显膨胀的部分包括 official-bundles、tool-executor、plugin-market、CUA 等。冷启动不是免费的：
+DSH workspace 合计约 **393** 个包（其中 `packages/*/*` 下约 **370** 个包、**53** 个非空分组——含新建的 **`team`** 分组；另有 apps、vendor、native、benchmarks、website、python/sdk-runtime 等；`packages/experimental/` 约 **61** 个包）。相对书稿上一基准（0.2.1-rc.3 时约 363 / 52 / ~386）的增量主要包括 team、forge、liveshare、web-deepseek-api 等。冷启动不是免费的：
 
 - **构建**：`build:lib:host` 是 `tsc -b tsconfig.host.json` 增量构建加 tsdown 打包，`build:lib:client` 对客户端做同样的事，`build:web` 用 Vite 构建前端；改一个包只重编它和受影响的依赖（第 2.4 节）。
 - **模块解析**：profile 启动时一次性计算不可变的解析代（`RuntimeResolution`）并装进 Node 的 ESM/CommonJS 解析器，不再在磁盘上创建和对账链接（第 4 章）。

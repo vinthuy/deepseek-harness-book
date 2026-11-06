@@ -6,7 +6,7 @@
 > - 概念：工具管线、执行契约、接缝三角（定义 / Provider / Consumer）、条件工具准入、执行器插件
 > - 设计：接缝 = 依赖倒置的极致（换 Provider 换执行世界）；为什么 E2B provider 被移除
 > - 新能力：后台任务接缝合并、工具输出 spill、动态工具更新、工具调用的三阶段呈现与参数预读、PTC runtime、MCP 资源与服务器说明
-> - 上一版基准 0.2.1-alpha.2 → **0.2.1-rc.3**（commit `22ddee3792`）：`tool-executor-native` / `tool-executor-ptc` 显式挂载、条件工具按步骤准入、`tool-subagent-control` 三件套、`agent-instructions` 按指令链计 `maxBytes`
+> - 上一版基准 0.2.1-rc.3 → **0.2.2-rc.1**（源码 commit `fcc0ad4621`）：Schedule 宿主范围 RRULE 工具、子代理按 **name** 寻址与显式推理路由、调用方取消的 `run_code` 报 `ABORTED`、`ctx.web` 默认 DeepSeek Search API（Exa / Perplexity 已移除）
 > - 动手：读 `tool-bash` / `tool-fs` 生产级源码，画出"工具 → 管线 → 接缝 → Provider"
 
 ## 8.1 工具是什么：模型面与系统面
@@ -115,7 +115,7 @@ flowchart TD
 - **单调守卫**（`ctx.tools.guard()`）是"后面的监听器无法撤销"的最终拒绝，适合不允许被重排的所有者策略。
 - **`ctx.approval` 在守卫之前解决 ask**：审批者缺席或无法回答时，**失败即拒绝**（`unavailable`）。
 - **`tools/result` 只观察**：它看到的是冻结的、无损 JSON 的最终结果。
-- 文件系统的"先读后改"检查不在工具里，而在 `tool-fs` 之下的 `fs/*` 事件闸门上（`dsh-fs-observation-policy`）。
+- 文件系统的"先读后改"检查不在工具里，而在 `tool-fs` 之下的 `fs/*` 事件闸门上（`dsh-fs-observation-policy`）。**0.2.2-rc.1 起该行默认 `disabled: true`**——交付组合里 `write` / `edit` 不再强制先读；要恢复旧行为，在 profile patch 里把该行翻回启用（第 10 章）。
 
 ### 工具输出 spill：大结果落盘，上下文只留定位
 
@@ -252,6 +252,8 @@ Python 后端在 0.2.1-alpha.1 补上了文件沙箱（升级指南 `python-ptc-
 
 PTC 模式对工具作者是"免费"的：每个可见的、被本步骤准入的工具都能在程序里以 `await tools.<name>(args)` 调用，参数和返回值类型从同一套 schema 生成；子调用**重新进入完整的管线**（策略、守卫、审批一个不少），携带父令牌，记录 `tool/ptc-dispatch` 事件，成功时拿到的是策略之后的**规范值**而不是渲染文本——这正是 8.3 节"返回值必须结构化"的回报。子调用的并发上限现在写在 **PTC 执行器**上：`@deepseek-ai/dsh-tool-executor-ptc` 的 `maxParallelSubCalls`（默认 10）；`agent-loop.maxParallelToolCalls`（默认也是 10）管的是主循环一批原生调用的上限，两处不要混用。
 
+调用方取消（升级指南 `ptc-caller-cancellation`）：运行中的 `run_code` 被调用方取消、且运行时报告 `abort` 时，`tool/result` 的错误码是标准的 `ABORTED`（`AbortError`），内容为 `Error: tool call aborted`——不再用 `CODE_RUN_FAILED` 包一层运行时诊断。超时、清理失败、没有调用方取消的内部取消仍报 `CODE_RUN_FAILED`；Agent 的具体取消原因继续写在 `turn/end`。取消仍等待清理完成，不会回滚已完成的嵌套工具操作。保留状态的 Node PTC（`persistent-in-memory` 或 `scriptPersistence: true` 的 `vm-script`）在超时／取消时先协作式停止：宿主最多等 `stopGraceMs`（默认 3000）拿确认，确认后保留变量；确认失败才终止进程（升级指南 `retained-ptc-timeout`）。
+
 ### 挂载执行器：native 与 ptc 是插件，不是 `dsh-tools` 的 mode
 
 0.2.1-rc.2（升级指南 `tool-executor-plugins`）把执行从配置字段里拆了出来：`@deepseek-ai/dsh-tools` 仍负责注册与选择执行器，但加载时会拒绝已删除的 `mode` / `maxParallelSubCalls`。真正干活的是两个插件：
@@ -300,17 +302,51 @@ AgentLoop 在提示词组装与 `agent/pre-step` **之前**，以 `{ agent, mode
 
 程序化调用条件工具时，先 `ctx.tools.resolve({ agent, modelSelection, signal })`，把返回的 `toolSet` 交给 `assemble()` 与执行批次，批次结束后释放。
 
-## 8.9 子代理控制工具与指令链预算
+## 8.9 子代理控制工具、按名寻址与指令链预算
 
-### `tool-subagent-control`：三个控制工具一次注册
+### `tool-subagent-control`：四个控制工具一次注册
 
-0.2.1-rc.1（升级指南 `subagent-control-tools`）把原先分散的控制面收成 `@deepseek-ai/dsh-tool-subagent-control`（`packages/subagent/tool-subagent-control`）：主入口**一起**注册 `send_message`、`interrupt_agent`、`list_agents`，要求注入 `tools`、`subagents`、`agents`。独立的 `/list-agents` 导出已移除——禁用这一行就关掉全部三个工具；若只要隐藏其中一个，用工具限制，而不是拆包。
+0.2.1-rc.1（升级指南 `subagent-control-tools`）把原先分散的控制面收成 `@deepseek-ai/dsh-tool-subagent-control`（`packages/subagent/tool-subagent-control`）。到 **0.2.2-rc.1**，默认一次注册四个工具，注入 `tools`、`subagents`、`agents`、`systemPrompt`：
 
-委派工具 `@deepseek-ai/dsh-tool-subagent` 一侧：配置键 `modelSelectionSettings` 改名为 `modelSelection`（控制可选子级路由字段）；每个工具作用域里若需要 `list_subagent_models`，须有**恰好一个**实例设 `modelDiscovery: true`（两个选项默认都是 false）。随附 Web / Desktop preset 为 spawn 打开这两项，fork 默认关闭路由字段。Host 的 `/model-selection-settings` 在 Agent 创建时记下授权策略——之后装工具或改设置都不会重新采样已有 Session；没有已记录策略时，发现与显式选择只允许当前父级路由。
+| 工具 | 作用 |
+| --- | --- |
+| `send_message` | 向同树另一 agent 投递消息；参数是 **`agent`（名称或 Session id）** + `message` |
+| `interrupt_agent` | 中断后代；同样用 `agent`；可用 `config.interrupt: false` 单独关掉注册 |
+| `wait_agent` | 等待**调用方自己**的下一步收件箱（升级指南 `inbox-only-agent-wait`）；默认可选超时 |
+| `list_agents` | 列出根与可达可继续后代 |
+
+禁用这一行就关掉整组；若只要隐藏其中一个，用工具限制，而不是拆包。旧参数名 `agent_id` **通不过** schema 校验。
+
+### 按名称寻址（升级指南 `subagent-names`）
+
+新子代理在创建者的 `subagent/catalog` 里拥有同级唯一 **name**：根为 `lead`，后代是 `reviewer/checker` 这样的路径。升级前创建的子级仍以 Session id 当名称。
+
+- `subagent` / `subagent_fork` / `subagent_oar` 接受可选 `name`；回执是 `started subagent <name>`，结果 `{ kind: 'activation', name }`；
+- `list_agents` 行是 `{ name, status, description? }`（不再是 `kind` / `id` / `label` / `parent` / `depth`）；文本形如 `<name> [<status>] — <description>`；
+- 目录写入第 **3** 版载荷——旧进程打不开含该载荷的 Session，升级前须让所有打开同一存储的进程先升级。
+
+### 显式推理覆盖要显式路由（升级指南 `subagent-explicit-reasoning`）
+
+启用模型选择的委派工具：只传 `reasoning_effort`、不传 `provider`+`model` 会在创建子级**之前**被拒绝。显式给出提供方／模型却省略强度时，用**该模型默认强度**（即使路由与父级相同，也不再默默继承父级强度）。三个字段都省略时，仍走配置的子级默认与既有回退。可用 `list_subagent_models` 查已授权路由与强度 id。
+
+委派工具 `@deepseek-ai/dsh-tool-subagent` 一侧：配置键 `modelSelectionSettings` 早已改名为 `modelSelection`；每个工具作用域里若需要 `list_subagent_models`，须有**恰好一个**实例设 `modelDiscovery: true`（两项默认都是 false）。随附 Web / Desktop preset 为 spawn 打开这两项，fork 默认关闭路由字段。
 
 ### `agent-instructions` 的 `maxBytes`：按链计，不是按整条基线
 
 `@deepseek-ai/dsh-agent-instructions`（`packages/context/agent-instructions`）把工作区指令做成模型可见的 `user/message`。0.2.1-rc.1（升级指南 `agent-instructions-chain-budgets`）起，`maxBytes` **分别**限制两条链——用户全局指令链（`$DSH_HOME/AGENTS.md` 与共享 agents 根）和项目指令链——因此同时含两条链的消息最多可达配置值的**两倍**。`dsh-base` 仍写 `maxBytes: 65536`；若部署仍要守原来的总量，把配置减半。被省略或截断的文件会出现在一行 `Workspace instruction budget ...` 标记里。`maxBytes` 属于基线标识，改完后恢复的每个会话都会收到一次完整的替代基线。
+
+### Schedule：宿主范围 + RRULE（升级指南 `schedule-agent-tools` / `schedule-remote-host-tasks`）
+
+`@deepseek-ai/dsh-tool-schedule` 不再注册 `schedule_update` / `schedule_delete`，也不再接受 `after_seconds` / `at` / `every_seconds` / `daily` / `weekly` / `cron` 这类时间选择参数。现四个工具：
+
+| 工具 | 要点 |
+| --- | --- |
+| `schedule_create` | 必填 `title`、`prompt`、`rrule`（一行 `DTSTART` + 一行 `RRULE`）、`target`（`this_session` / `new_once` / `new`） |
+| `schedule_list` | 宿主全部任务的一页 `{ items, shown, total, limit, offset }`（含暂停与已结束） |
+| `schedule_view` | 按 id 读一个任务 |
+| `schedule_edit` | `action: "update"`（可改 rrule / target / 暂停恢复）或 `"delete"` |
+
+任务按 id 管理**宿主全部**任务，不只是调用方 Session；委派子 agent 调用返回 `subagent_session`。底层 `ctx.schedule` 原生／Remote 共用同一套宿主管理 API（`create` / `edit` / 分页 `list` / `view`）；存储写版本 2。Web 的 `standard` / `cordis` / `ptc` preset 挂载该工具包，`minimal` 不挂——若某 preset 不应管理其他 Session 的任务，从该 preset 去掉这一行。
 
 ## 8.10 MCP：外部工具、资源与服务器说明
 
@@ -337,7 +373,8 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 | `ctx.spillStore` | 大输出存储 | `spill-local` |
 | `ctx.ptcRuntime` | PTC 程序执行 | `ptc-runtime-node`、`experimental-ptc-runtime-python` |
 | `ctx.mcpResources` | MCP 资源访问 | `mcp-client` |
-| `ctx.web` | 搜索 / 抓取 | `web-search-exa`、`web-search-perplexity`、`web-search-deepseek`、`web-fetch-http` |
+| `ctx.web` | 搜索 / 抓取 | `web-search-deepseek`（旧版 Messages 搜索）、`web-deepseek-api`（Search / Fetch API）、`web-fetch-http`；**Exa / Perplexity 包已移除** |
+| `ctx.schedule` | 宿主定时任务 | `schedule`（存储与投递）；模型面消费者 `tool-schedule` |
 | `ctx.lsp` | 语言服务导航 | `lsp-stdio` |
 | `ctx.skills` | 技能 | `skill-filesystem`、`skill-office`、`sandbox-windows-acl`、`skill-badge`（实验区） |
 | `ctx.subagents` | 子 Agent | `subagent-spawn-in-process`、`subagent-fork-in-process`、`subagent-acp`、`subagent-codex`、`subagent-claude-code`、`subagent-dsh-sdk` |
@@ -347,7 +384,7 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 | `ctx.workingDirectory` | 会话工作目录 | `working-directory` |
 | `ctx.worktrees` | Git worktree 创建（实验） | `experimental-worktree` |
 
-> **包位置变化**（上一版基准 0.1.7-rc.2 → 0.2.1-alpha.2）：持久终端的六个模型工具（`@deepseek-ai/dsh-tool-terminal`）、Ralph 循环工具（`@deepseek-ai/dsh-tool-ralph`）和会话查询工具（`@deepseek-ai/dsh-tool-session-query`）都搬进了 `packages/experimental/`，包名不变，分别由默认关闭的可选 bundle `@deepseek-ai/dsh-experimental-terminal-bundle`、`@deepseek-ai/dsh-experimental-ralph-bundle`、`@deepseek-ai/dsh-experimental-session-search` 加载。提醒管理工具则从 `@deepseek-ai/dsh-schedule` 里拆出成独立包 `@deepseek-ai/dsh-tool-schedule`（`schedule_create` / `schedule_list` / `schedule_update` / `schedule_delete`），由 preset 或 Agent 作用域挂载、由 preset 决定哪些 Agent 拿到它们；Schedule 服务本身由 Web 组合直接挂载（旧的 Automation tasks 可选 bundle 已退役，升级指南 `schedule-bundle-retired`）。这些都是"组合层"的移动——接缝和工具管线没有变。
+> **包位置与组合默认**（对照 0.2.2-rc.1）：持久终端 / Ralph / 会话查询仍在 `packages/experimental/`，由默认关闭的可选 bundle 加载。`@deepseek-ai/dsh-tool-schedule` 现为 `schedule_create` / `schedule_list` / `schedule_view` / `schedule_edit`（宿主范围 + RRULE，见 8.9）；`dsh-base` 的 `web.searchProvider` 默认 `deepseek-search-api`（第 9 章）。`tool-fs` 另有可选 `apply_patch`（配置键 `applyPatch`，交付默认目前为 `false`）。这些都是组合层选择——接缝和工具管线没有变。
 
 注意这张表的读法：**每一行都是一条"换 Provider 的选项"**。产品在左，实现在右，中间是稳定的接口。完整的、由脚本从 Cordis 声明生成的清单（含每个接缝的直接消费者和伴随插件）见 `docs/capability-seams.md`；每个工具包注册了哪些工具、依赖哪些服务，见 `docs/tool-catalog.md`。
 
@@ -378,7 +415,10 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 - **调用条件工具却不传本步的 `toolSet`**：得到 `UNKNOWN_TOOL`，实现根本不会跑；
 - **工具自己从会话头部或 `process.cwd()` 解析相对路径**：用 `ctx.workingDirectory`，否则会话切换目录后你的工具会读写错项目；
 - **假设 `presentationMeta` 只在原生顶层调用时运行**：嵌套 PTC 调用也会运行它，投影要纯、要能识别操作的真实目标；
-- **把 `agent-instructions` 的 `maxBytes` 当成整条基线的总预算**：它按链分别计，两条链同时出现时上限可到配置值的两倍。
+- **把 `agent-instructions` 的 `maxBytes` 当成整条基线的总预算**：它按链分别计，两条链同时出现时上限可到配置值的两倍；
+- **还在写 `schedule_update` / `schedule_delete` 或时间选择参数**：已换成 `schedule_edit` + RRULE + `target`；任务是宿主范围的；
+- **控制工具仍传 `agent_id`，或只传 `reasoning_effort` 不传路由**：前者校验失败；后者在创建子级前被拒绝；
+- **把调用方取消的 `run_code` 仍当成 `CODE_RUN_FAILED`**：新结果是 `ABORTED`；历史日志里旧码仍可能出现。
 
 ## 8.14 思考题
 
@@ -390,15 +430,18 @@ MCP（Model Context Protocol）服务器是另一类工具来源：
 6. `create_worktree` 没有自己的"当前目录"状态，而是建好 checkout 后调用工作目录服务切过去。如果让 worktree 工具自己维护目录状态，文件工具、shell、子 Agent 分别会遇到什么不一致？
 7. 条件工具的 `when` 按步骤计算一次，热重载却会让步骤里尚未开始的同名调用变成 `UNKNOWN_TOOL`。这和"动态工具更新保住前缀缓存"之间有什么张力？你会把哪类工具做成条件工具，哪类坚持常驻？
 8. 执行器拆成插件之后，自定义组合漏挂执行器会在启动期失败，而不是运行到第一次工具调用才失败。请对比这两种失败时机对运维与安全的影响。
+9. Schedule 工具改成宿主范围之后，任意挂了 `tool-schedule` 的 Agent 都能改别的 Session 创建的任务。若产品只想让"当前会话的提醒"可管，你会把限制放在 preset 组合、工具 `when`、还是服务层授权？各自的代价是什么？
+10. 子代理按 name 寻址、目录升到第 3 版载荷：旧进程打不开新 Session。这和"动态工具更新不升级会话格式"的选择有什么不同？什么时候值得打破向前兼容？
 
 ## 小结
 
 - 工具 = 模型与世界的闸门：参数校验、策略、执行、结果规范化、UI 呈现；schema 自动进入请求并记录在 `request/header` 中；
 - 管线：`tools/pre-execute` → 审批 / 单调守卫 → `tools/execute` → 工具本体 → `tools/post-execute` → `tools/result`；spill、超时、钩子都以插件形式挂在管线上；
 - 接缝三角：定义 / Provider / Consumer——换 Provider 换执行世界；E2B 被移除、远程执行世界如今由 POSIX SSH 这组 Provider 提供，消费者无需改动；
-- 执行形态由 `tool-executor-native` / `tool-executor-ptc` 显式挂载（base 默认 native）；条件工具经 `when` + 步骤 `ResolvedToolSet` 准入；`tool-subagent-control` 一次注册三个控制工具；`agent-instructions.maxBytes` 按指令链分别计；
+- 执行形态由 `tool-executor-native` / `tool-executor-ptc` 显式挂载（base 默认 native）；条件工具经 `when` + 步骤 `ResolvedToolSet` 准入；`tool-subagent-control` 一次注册四个控制工具（按 **name** 寻址）；显式推理覆盖须带显式路由；`agent-instructions.maxBytes` 按指令链分别计；
+- Schedule：`ctx.schedule` 宿主 API + `tool-schedule` 的 RRULE／`target` 四工具；调用方取消的 PTC 报 `ABORTED`；
 - 新能力各守边界：`ctx.jobs` 一环一投影一事件流；工具调用三阶段与参数预读只改呈现；动态工具更新不改持久格式；PTC runtime 统一为 `ptc-runtime` 词汇，Python 后端强制共享沙箱；MCP 的资源和说明都经由日志进入模型；
-- 0.2 系列新增 `ctx.workingDirectory` 与实验性 `ctx.worktrees`，SSH 辅助程序改为显式 `launch` 模式并可打包内嵌 Node；终端、Ralph、会话查询工具移入实验区，提醒工具拆为 `tool-schedule`；
+- `ctx.web` 交付默认 DeepSeek Search API；观察策略默认关闭（第 10 章）；`ctx.workingDirectory` 与实验性 `ctx.worktrees` 仍在；
 - 生产级参考：`tool-bash`（terminal 卡片）、`tool-fs`（diff 卡片）。
 
 下一章：把模型接进来——`ctx.llm` 与凭据，以及"密钥绝不进配置"这条纪律。

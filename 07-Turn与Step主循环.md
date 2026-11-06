@@ -2,13 +2,13 @@
 
 > 第 6 章我们知道了会话是一条事件日志。这一章讲**是谁在往日志里写事件**——那个驱动模型思考、调用工具、再思考的循环。它是 Agent 的灵魂，也是 DSH 里被插件化得最彻底的东西。
 
-> 本章基于 DSH **0.2.1-rc.3**（源码 commit `22ddee3792`）。
+> 本章基于 DSH **0.2.2-rc.1**（源码 commit `fcc0ad4621`）。
 >
 > **本章你将学到**：
 > - 概念：step 与 turn、完整时序、inbox 的两个边界与"先认领再决策"
 > - 设计：为什么主循环是插件；条件工具的 step admission、pre-step / request / llm-stream 闸门与 turn-stopping 的"数据决定"
 > - 控制：显式的 turn 取消、followup / steer / inject 三种投递语义、后台任务完成如何唤醒 Agent
-> - 新变化（相对 0.2.1-alpha.2）：`ctx.tools.register(..., { when })` + 每步 `resolve()`；模型选型在 step 准备时固定、`agent/request` 弃用；失败 step 补写工具结果等既有规则仍适用
+> - 新变化（相对 0.2.1-rc.3）：`wait_agent` 只等调用方下一步 inbox（任务板变更不再结束等待）；Team 模式改走根会话菜单；Chat `ProcessActivity` 新增 `context`；条件工具 / 选型 / 独立 fork 等既有规则保留
 > - 动手：在真实会话日志里观察 step 边界与"模型自己决定多走一步"
 
 ## 7.1 先问"为什么"：循环是从哪来的？
@@ -185,9 +185,13 @@ agent.inject(createUserMessage({
 
 从主循环的角度看，这让委派变成了和后台任务一样的**事件驱动**：父 step 不被一个可能跑十分钟的子任务卡住，子任务结束时的通知像其它输入一样进入 inbox、被认领、进入下一次请求。
 
-### Agent Teams：消息直接进目标 inbox
+### Agent Teams：消息直接进目标 inbox，等待只认 inbox
 
-实验性的 Agent Teams（`@deepseek-ai/dsh-experimental-agent-team`）曾经维护一个独立的 Team 邮箱：消息先排队、再投递、再确认。笔记 `2026-09-26-team-direct-inbox.md` 认为这是和 Agent inbox 重复的第二套所有权，于是把新消息**直接**送进目标 Agent 的 inbox（经 Lead 的 steer 或宿主专用的子 Agent steer 适配器），发送者身份沿用已有的 `agent-message` 来源。模型侧的 `send_message` 现在只返回 `{ "sent": true }`——"已被 inbox 接受"既不代表模型处理过，也不代表同步落盘；失败的发送不会被保留重试，显式重发也不去重。配置键 `maxPendingMessagesPerMember` 被删除；历史的 `team/message/queued` / `team/message/delivered` 记录仍可读、可投影，但升级前没投递的排队消息**永远不会**再被派发（升级指南 `team-direct-inbox`）。
+Agent Teams 现为正式分组 `packages/team/`（`@deepseek-ai/dsh-agent-team`、`dsh-tool-agent-team`、`dsh-client-ui-agent-team`；旧的 `@deepseek-ai/dsh-experimental-agent-team*` 名已替换）。它曾经维护一个独立的 Team 邮箱：消息先排队、再投递、再确认。笔记 `2026-09-26-team-direct-inbox.md` 认为这是和 Agent inbox 重复的第二套所有权，于是把新消息**直接**送进目标 Agent 的 inbox（经 Lead 的 steer 或宿主专用的子 Agent steer 适配器），发送者身份沿用已有的 `agent-message` 来源。模型侧的 `send_message` 现在只返回 `{ "sent": true }`——"已被 inbox 接受"既不代表模型处理过，也不代表同步落盘；失败的发送不会被保留重试，显式重发也不去重。配置键 `maxPendingMessagesPerMember` 被删除；历史的 `team/message/queued` / `team/message/delivered` 记录仍可读，但 **`agentTeam` 投影不再恢复**历史名册 / 邮箱集合（只保留任务与保存的模式，升级指南 `team-projection`，第 6 章）；升级前没投递的排队消息**永远不会**再被派发（升级指南 `team-direct-inbox`）。
+
+**模式开关**：`/team on` 与 `/team off` 已移除。根会话的模型与推理等级菜单提供**使用智能体团队**开关，直接调用 `remote.agentTeams.setEnabled`（插件侧 `ctx.agentTeams.setEnabled(rootAgent, enabled)`）；选择按 Session 保存，关闭后仍保留任务与子代理（升级指南 `team-mode-menu` / `session-team-mode`）。新 Session 默认关闭 Team。
+
+**`wait_agent` 只等调用方的下一步 inbox**（升级指南 `inbox-only-agent-wait`，工具属 `@deepseek-ai/dsh-tool-subagent-control`，无需 Team 包）：已有下一步输入时立即返回；新消息、完成通知和用户引导会结束等待，但**不消费**输入。任务创建 / 分配 / 完成、排队的下一轮输入、其他 Agent 的状态变化**都不会**结束等待，也不会往 inbox 塞消息或启动空闲 Agent。需要队友处理任务更新时，改完任务后显式 `send_message`，不要指望任务板副作用把 `wait_agent` 叫醒。超时与取消行为不变；结果只有 `{ timedOut: boolean }`。
 
 ### 可超时的用户提问：前台等待与迟到回答是两次结算
 
@@ -260,6 +264,7 @@ DSH 的答案是**把判定标准显式化**："什么都不欠"。这让 UI 上
 
 - **工具结果是一等的 tool 角色消息**。循环写下的 `tool/result`，在会话格式 v4 里就是 `role: 'tool'` 的消息（第 6 章），各家 provider 适配器再把它映射成自己的工具结果表示。对话角色集合是**封闭的**：一个模型可见的角色必须既有持久的会话事件、又有适配器投影，适配器不会把没入日志的扩展角色偷偷变成用户文本。
 - **进程分组与 step 正交**。Web 聊天界面会把连续的"过程内容"（推理、工具调用）折叠成可展开的组，而回复、用户输入、turn 控件保持独立。一个 assistant 节点可能把推理放进组里、把回复放在组外，之后的工具又进入下一个组——**用 step 编号区间描述不了这种成员关系**。笔记 `2026-09-21-conversation-build-groups.md` 因此把分组规则交给注册的 `ConversationGroupDefinition`（`packages/client/ui-conversation`），由业务方（`ui-chat`）拥有分组逻辑，通用的 Builder 只做输入、分派与发布，且三种显示模式共享同一份分组结果。
+- **`ProcessActivity` 新增 `context`**（升级指南 `chat-process-activity-context`，0.2.2-alpha.3）：`@deepseek-ai/dsh-client-ui-chat/client` 导出的过程组类别现在包含 `context`——成员**全部**为上下文注入的已结束过程组以它作为唯一类别。`ProcessActivitySummary.running` 的类型改为 `RunningProcessActivity`（即 `Exclude<ProcessActivity, 'context'>`），因为运行中的工具调用不会报 `context`。对 `ProcessActivity` 做穷尽 `switch` / `Record<ProcessActivity, …>` 的扩展要补上 `context` 分支；只读 `summary.running` 且不必覆盖 `context` 的代码应改用 `RunningProcessActivity`。
 - 工具卡片在 `tool/call` 到达之前就可以出现："preparing → start → result" 三阶段（第 8 章），只影响呈现，不改变请求、派发时机或会话事件。
 
 ## 7.9 Agent 与 AgentHandle：活跃 Agent 的生命周期
@@ -307,6 +312,9 @@ corepack pnpm dsh --profile headless "用 ls 和 cat 了解一下当前目录，
 - **把取消当作可选项**：`exec.signal` 以及各事件 payload 里的 `signal` 是契约的一部分；不响应取消会让 `whenIdle()` 永远等下去，也别把某一轮的 signal 保存下来去控制另一轮；
 - **还在找子 Agent 的 `run_in_background` 或用 `job_output` 收子 Agent 结果**：已删除。委派工具返回 `subagentId`，结果走完成通知；代码里要同步拿结果，用 `startActivation({ ..., delivery: 'caller' })` 并记得 `dispose()`；
 - **把 Agent Teams 的 `{ sent: true }` 当成"对方已处理"**：它只表示目标 inbox 已接受；
+- **指望改任务板就能结束 `wait_agent`**：不会；任务更新不是 inbox 输入，需要对方行动时显式 `send_message`；
+- **还在找 `/team on|off`**：已移除，改用根会话菜单的**使用智能体团队**；
+- **对 `ProcessActivity` 穷尽匹配却漏掉 `context`**：纯上下文过程组会报这个类别；`running` 请用 `RunningProcessActivity`；
 - **把普通 Session fork 当成子代理**：普通 fork 无 `parentSession`；看 `origin === 'subagent'`（第 6 章）。
 
 ## 7.12 思考题
@@ -319,12 +327,15 @@ corepack pnpm dsh --profile headless "用 ls 和 cat 了解一下当前目录，
 6. 可超时的用户提问把"前台等待"和"迟到回答"拆成两次结算，迟到回答用 `steer` 而不是 `inject` 投递。如果改用 `inject`，或者干脆让原来的工具调用一直挂着等回答，分别会出现什么问题？
 7. 条件工具的 `when` 在 assemble / pre-step **之前**求值一次。若你在 `agent/pre-step` 里根据本步消息决定"要不要暴露某个危险工具"，这个设计还能不能用？应该改成什么？（提示：对比 `when` 收到的 `modelSelection` 与消息内容）
 8. 用户在工具执行途中切换了模型。为什么当前 step 的重试仍用旧路由，而同 turn 的下一步才用新路由？这和"Model-visible means logged"有什么关系？
+9. `wait_agent` 改为只等调用方下一步 inbox 之后，Lead 用"改任务 → 等队友"的剧本会怎样卡住？正确的协作顺序是什么？为什么任务更新故意不唤醒空闲 Agent？
+10. Chat 把"全是 Context 节点的过程组"标成 `ProcessActivity.context`，却不允许它出现在 `summary.running`。若扩展把 `running` 也当成完整的 `ProcessActivity` 穷尽匹配，会出什么类型 / 运行时问题？
 
 ## 小结
 
 - step = 一次请求 + 工具调用；turn = 零到多个 step，在认领输入前打开、在"什么都不欠"时关闭；
 - 主循环是插件（`dsh-agent-loop`）：每步先 `tools.resolve`（条件工具 admission），再 assemble（无工具数组），再 `agent/pre-step`；`agent/request` 已弃用，选型走 `agent.model.select()`；`llm/stream` 包装流；`agent/turn-stopping` 是 serial 终点，决策落在数据（steer / `concludesTurn`）上；
-- inbox 有 next-turn / next-step 两个边界，每步前原子认领一次；followup / steer 唤醒，inject 静默；父子 Agent 之间统一用 steer；子 Agent 委派统一为激活（立即返回、完成通知入日志），Agent Teams 直投 inbox，迟到的提问回答也是一条 steer；
+- inbox 有 next-turn / next-step 两个边界，每步前原子认领一次；followup / steer 唤醒，inject 静默；父子 Agent 之间统一用 steer；子 Agent 委派统一为激活（立即返回、完成通知入日志）；Agent Teams（`packages/team/`）直投 inbox，模式走根会话菜单，`wait_agent` 只认下一步 inbox；迟到的提问回答也是一条 steer；
+- Chat 过程组类别含 `context`；运行中活动用 `RunningProcessActivity`；
 - 失败的 step 在关闭前补写 `TOOL_OUTCOME_UNKNOWN` / `TOOL_NOT_STARTED` 结果，保证工具调用与结果始终配对；
 - 取消是显式的：类型化原因、每轮一个信号、协作式执行，结果以 `aborted` 及其原因入日志；
 - 循环卫生靠 guard 插件：提醒不强制，决定权在模型；并行度由 `maxParallelToolCalls` 与执行模式共同决定。

@@ -1,6 +1,6 @@
 # 第 4 章 配置分层：Profile 与 Bundle——一份 YAML 就是一次产品定制
 
-> 第 2 章我们看到了 web 和 headless 两种产品共享一个底座。这一章回答：**这种"换配置换产品"的机制是怎么实现的？** 答案是一个极简但深思熟虑的模型：分层、补丁、按 id 覆盖。在 0.1.7 里，这个模型又往前走了几步：配置表单直接写回 profile 的补丁层、Agent 预设变成普通的配置行、插件可以在 Web 界面里安装，而 profile 加载插件的模块解析规则被重新写成了"一句话能讲清"的形式。从上一版基准 `0.2.1-alpha.2` 到本版 `0.2.1-rc.3`（commit `22ddee3792`），分层模型本身仍未变，变的是列表的家、兼容性闸门，以及插件页上能看见什么：官方 bundle 列表迁到 `@deepseek-ai/dsh-official-bundles`；兼容性优先读 `engines.dsh`；可选 bundle 扩到 14 项（含 CUA、个性化推荐、插件市场）；持久终端仍在可选清单里，但已从插件页隐藏，改走 profile 配置。
+> 第 2 章我们看到了 web 和 headless 两种产品共享一个底座。这一章回答：**这种"换配置换产品"的机制是怎么实现的？** 答案是一个极简但深思熟虑的模型：分层、补丁、按 id 覆盖。在 0.1.7 里，这个模型又往前走了几步：配置表单直接写回 profile 的补丁层、Agent 预设变成普通的配置行、插件可以在 Web 界面里安装，而 profile 加载插件的模块解析规则被重新写成了"一句话能讲清"的形式。从上一版基准 `0.2.1-rc.3`（commit `22ddee3792`）到本版 `0.2.2-rc.1`（commit `fcc0ad4621`），分层模型本身仍未变；变的是官方可选清单与插件页可见性，以及 Include 落盘语义（第 3 章）：可选 bundle 扩到 **15** 项（新增 Forge、LiveShare；原 Agent Team 可选包已退役）；独立的 Git 工作树卡片并入 Forge 入口并隐藏；Loader 条目树用 `commit(change)` + Include journal 持久化运行时变更。
 
 > **本章你将学到**：
 > - 概念：Profile、Bundle、补丁三层模型与覆盖规则；官方列表包；`engines.dsh`；可选 / 按需 / 隐藏的 bundle
@@ -84,7 +84,7 @@ corepack pnpm dsh rescue                              # 以后直接用
 
 对尚不存在的自定义 profile，它只复制模板**当前**的 bundle 列表，依赖和补丁都是空的，也不记录"继承自谁"；若同名自定义 profile **已经存在**，`--from-default-profile` 会用模板重新覆盖它的 bundle 列表（帮助文案写的是 *replace*）。另外还有一个名为 `desktop` 的**保留** profile，由 Electron 桌面端自己持有和加载，不走 CLI 的 profile 查找。
 
-profile 加载时还会做一点"自我修复"：`RETIRED_BUNDLES`（同在 `@deepseek-ai/dsh-official-bundles`）列出早期版本随安装附带、现在已经不再提供的 bundle。加载 profile 时，这些名字会被从 `dsh.profile.bundles` 里删掉并重写 `package.json`（其它字段保持不变）。目前集合里只有一个名字：`@deepseek-ai/dsh-experimental-schedule-bundle`（见 4.5 节的"定时任务"往事）。
+profile 加载时还会做一点"自我修复"：`RETIRED_BUNDLES`（同在 `@deepseek-ai/dsh-official-bundles`）列出早期版本随安装附带、现在已经不再提供的 bundle。加载 profile 时，这些名字会被从 `dsh.profile.bundles` 里删掉并重写 `package.json`（其它字段保持不变）。目前集合里有两个名字：`@deepseek-ai/dsh-experimental-schedule-bundle`（见 4.5 节的"定时任务"往事）与 `@deepseek-ai/dsh-experimental-agent-team-profile`（团队能力已并入 base / Web 组合，升级指南 `v0.2.1-rc.2/session-team-mode`）。
 
 ## 4.4 Bundle：插件发行单元
 
@@ -135,7 +135,7 @@ bundle 的价值：**它插入的东西仍然可以被上层补丁改写**——
 
 ## 4.5 可选 bundle：随安装附带、默认关闭；以及"按需安装"的官方 bundle
 
-有些能力官方想提供，但不想默认开启。0.1.7 为此引入了**随安装附带的可选 bundle**（笔记 `implemented/process/2026-09-15-shipped-optional-bundles.md`、`implemented/architecture/2026-09-21-experimental-capabilities-as-optional-bundles.md`）。清单现在住在 `@deepseek-ai/dsh-official-bundles` 的 `OPTIONAL_BUNDLES`，到 `0.2.1-rc.3` 是 **14** 项：
+有些能力官方想提供，但不想默认开启。0.1.7 为此引入了**随安装附带的可选 bundle**（笔记 `implemented/process/2026-09-15-shipped-optional-bundles.md`、`implemented/architecture/2026-09-21-experimental-capabilities-as-optional-bundles.md`）。清单现在住在 `@deepseek-ai/dsh-official-bundles` 的 `OPTIONAL_BUNDLES`，到 `0.2.2-rc.1` 是 **15** 项：
 
 ```ts
 export const OPTIONAL_BUNDLES: readonly string[] = [
@@ -146,21 +146,24 @@ export const OPTIONAL_BUNDLES: readonly string[] = [
   '@deepseek-ai/dsh-experimental-terminal-bundle',
   '@deepseek-ai/dsh-experimental-badge-skill-bundle',
   '@deepseek-ai/dsh-experimental-session-titles-bundle',
-  '@deepseek-ai/dsh-experimental-agent-team-profile',
   '@deepseek-ai/dsh-experimental-voice-input-bundle',
   '@deepseek-ai/dsh-experimental-cot-translation-bundle',
   '@deepseek-ai/dsh-experimental-auto-review',
   '@deepseek-ai/dsh-experimental-inspector-profile',
+  '@deepseek-ai/dsh-experimental-liveshare',
   '@deepseek-ai/dsh-experimental-plugin-market-bundle',
   '@deepseek-ai/dsh-experimental-tool-worktree',
+  '@deepseek-ai/dsh-experimental-forge-bundle',
 ]
 ```
 
-相对上一版基准 `0.2.1-alpha.2` 的 11 项，本轮新增 3 项：个性化推荐（`dsh-personalized-recommendations`）、计算机操控 CUA（`dsh-cua-bundle`）、自定义插件索引 / 发现页（`dsh-experimental-plugin-market-bundle`，挂载 `@deepseek-ai/dsh-plugin-market` 与 Web 发现 UI）。多数实验包源码仍在 `packages/experimental/`；CUA、推荐等也按同一套"可选层"规则进入清单。
+相对上一版基准 `0.2.1-rc.3` 的 14 项：去掉已退役的 `@deepseek-ai/dsh-experimental-agent-team-profile`，新增 **LiveShare**（`@deepseek-ai/dsh-experimental-liveshare`）与 **Forge**（`@deepseek-ai/dsh-experimental-forge-bundle`），合计 15。多数实验包源码仍在 `packages/experimental/`；CUA、推荐、Forge、LiveShare 等也按同一套"可选层"规则进入清单。
 
 规则依旧克制：每个可选 bundle 必须是 CLI 安装包的运行时依赖、声明 `dsh.bundle.patch`、带 `icon` 和 `./locale/*.json` 显示元数据，并且**不被任何内置模板选中**。插件管理器把它们报告为 `optional`：默认关闭、不可删除、从安装目录解析。"官方"表示"由项目维护"，与"是否实验性"是两个独立属性（`EXPERIMENTAL_BUNDLES` 另表标记）。
 
-同包里的 `HIDDEN_BUNDLES` 决定插件页**根本不展示**哪些包：除六个内置形态 bundle 外，还把 `@deepseek-ai/dsh-experimental-terminal-bundle`（持久终端）藏起来——包和已有启用状态仍在，只是 Web/Desktop 插件列表与详情页不再提供开关（升级指南 `v0.2.1-rc.2/persistent-terminal-controls`）。要改它，直接编辑 `$DSH_HOME/profiles/<名>/package.json` 的 `dsh.profile.bundles`：加入该包名即启用，去掉即关闭，然后重启同一 profile；用 `dsh --profile <名> --dump-config` 核对时，只有选中它才会出现 `optional-persistent-terminals` 分组。`minimal` 预设自带的持久 shell **不依赖**这个组合包。
+同包里的 `HIDDEN_BUNDLES` 决定插件页**根本不展示**哪些包：除六个内置形态 bundle 外，还把 `@deepseek-ai/dsh-experimental-terminal-bundle`（持久终端）与 `@deepseek-ai/dsh-experimental-tool-worktree`（独立 Git 工作树工具）藏起来——包和已有启用状态仍在，只是 Web/Desktop 插件列表与详情页不再提供开关（升级指南 `v0.2.1-rc.2/persistent-terminal-controls`、`v0.2.2-alpha.2/forge-worktree-entry`）。要改它们，直接编辑 `$DSH_HOME/profiles/<名>/package.json` 的 `dsh.profile.bundles`：加入该包名即启用，去掉即关闭，然后重启同一 profile；用 `dsh --profile <名> --dump-config` 核对时，只有选中持久终端才会出现 `optional-persistent-terminals` 分组。`minimal` 预设自带的持久 shell **不依赖**终端组合包。
+
+**Forge 是统一入口。** 插件页上的"变更请求与工作树"对应 `@deepseek-ai/dsh-experimental-forge-bundle`：一次打开会挂上评审面板、新会话的工作树选项，以及模型的 `create_worktree` 工具（补丁里仍是 `worktree` / `tool-worktree` / `optional-forge-panel` 等稳定 id）。已经勾选独立 `tool-worktree` 的 profile **不会**自动迁移——关掉 Forge 也停不掉那个独立工具；两者同时选中会插入重复的 `worktree` / `tool-worktree` id，对应控件变成只读。迁移时先从 `dsh.profile.bundles` 去掉独立包名，再按需保留 Forge（升级指南 `forge-worktree-entry`）。Headless 或自定义组合若只要独立工具、不要面板，仍可只选 `tool-worktree`，但不要与 Forge 叠选。
 
 这些 bundle 插入的都是**普通的 Host 行**：可选的模型工具注册在全局工具层，所以每个 Agent 预设（包括 `minimal`）都会拿到它们；开关一个 bundle，会给正在运行的 Agent 注册或移除对应工具，而更高的用户补丁层仍然优先。插件管理、profile 合成和热重载都不需要为可选 bundle 写特殊逻辑——这就是"可选能力也只是配置层"的好处。
 
@@ -230,7 +233,7 @@ profile 关闭了自动安装 peer（4.8 节），所以必需的 peer 要一起
 3. home 级补丁 `$DSH_HOME/cordis.patch.yml`（所有 profile 共享，所以它**高于** profile 层）；
 4. 命令行 `--patch <文件>`，按出现顺序，可重复。
 
-覆盖规则只有两条，**故意只有两条**（语义实现在 `vendor/include/src/index.ts` 的 `applyEntryPatches`）：
+覆盖规则只有两条，**故意只有两条**（语义实现在 `vendor/include` 导出的 `applyEntryPatches`；与挂载共用上游算法，且**始终返回克隆后的条目**，见第 3 章）：
 
 - **按 `id` 命中**：补丁里除 `id`/`name`/`insert` 之外写出的每个字段（`config`、`disabled`、`inject`、`isolate`……）都**整体替换**目标条目的同名字段；没写的字段保持原样。如果补丁同时写了 `name`，它是一个断言：和目标条目的 `name` 不一致就跳过这条补丁。
 - **`insert` 插入**：不带 `id` 时追加到顶层；带 `id` 时插入到那个 group 条目的子列表里。同一份补丁列表中，后面的补丁可以命中前面刚插入的条目。
@@ -238,6 +241,8 @@ profile 关闭了自动安装 peer（4.8 节），所以必需的 peer 要一起
 所以第 3 章实验里，`webserver` 条目在 bundle 层配置了带表达式的 `port`，你的补丁把整个 `config` 替换掉——想"只改一个字段但保留其他字段"？必须把整个 config 重新写全。
 
 还有两个边界行为要记牢：补丁命中一个**不存在的 id**，只会打印一条警告并跳过（`--dump-config` 会带上层标签报告它），而不是启动失败；一个**空的或只有注释**的补丁文件会让启动失败——想"禁用这一层"，写 `[]`。
+
+运行时若改到 **patch 拥有**的字段或插入行，Include 的 journal 会把变更写到**父 Include 的 patch**，而不是被 include 的源文件；需要落盘时要 `flush()` 子再 flush 父（第 3 章）。`dsh` profile 根 Include 的父级是内存 Loader，因此"bundle 行自行 `disabled: true`"这类瞬时改动**不会**变成你下次启动还能看见的用户补丁——持久化的真相仍然是你（或 Web 表单）写进 `cordis.patch.yml` / home 补丁的那些行。
 
 ### 设计思考：为什么"整行替换"而不是"深度合并"？
 
@@ -375,7 +380,7 @@ corepack pnpm dsh plugin --profile web help             # pnpm 的总帮助
 - **引导式安装**（`architecture/2026-09-15-guided-plugin-installation.md`）：安装前先"读"一遍 spec（registry 包名、绝对路径、git 地址、tarball），通过 `pnpm view` 或目录下的 `package.json` 拿到名字、版本、描述和 bundle 声明；**没有 bundle 补丁的包在 pnpm 运行前就被拒绝**。安装失败、被取消、或装上的包没有 bundle 补丁时，会恢复安装前快照的 `package.json` 和 `pnpm-lock.yaml`。安装完成后才提供"立即启用"，而不是先勾选再安装；
 - **安装源计划**（`architecture/2026-09-18-plugin-install-registries.md`）：`PluginManager.Config` 新增 `registry`（首先询问的源）与 `fallbackRegistries`（默认是 npmmirror）。只有网络、超时、包不存在、版本不匹配这几类"换个源可能就好"的失败才会切到下一个源；**私有源永远不会回退到公共源**——否则一个在两边同名的包，就可能装成别人的（依赖混淆）。CLI 侧则是把 `--registry` 交给 pnpm：`dsh plugin --profile <名字> add --registry <源地址> <包名>`；
 - 每个插件的标题、描述和图标来自插件自己导出的 `locale/<语言>.json`（`meta.title`、`meta.description`）和 `package.json` 的 `icon`，读取时**不导入、不激活**插件，所以被禁用或加载失败的插件也能正常显示。0.2.1-alpha.1 起，**子路径插件**（如 `my-plugins/search`）不再读取任何 `package.json`：标题和描述只来自 `my-plugins/search/locale/*.json`，图标只来自导出的 `my-plugins/search/icon` 资源；包根插件不受影响，没写 `icon` 时也可以用导出的 `./icon` 补上（升级指南 `v0.2.0-rc.2/subpath-plugin-display-manifest`，附录 D 有示例）；
-- **"官方"分组**同时列出随安装附带的可选 bundle 和按需安装的目录项（4.5 节），但会跳过 `HIDDEN_BUNDLES`（内置形态 + 持久终端）。主列表优先排 `EXTENSION_BUNDLES`（团队、语音、插件市场、自动审查），`MORE_BUNDLES` 里的项要等 profile 启用后才上主列表。插件客户端拿到的 `BundleInfo` 带必填的 `official` 与 `availability`：前者表示"由项目维护"，后者是 `installation`、`profile` 或 `missing`；`installed` 仍然只表示"profile 声明了这个依赖"。已装的按需 bundle 可以通过 **Update** 更新到与当前 DSH 匹配的版本，需要重启时会明确报告。
+- **"官方"分组**同时列出随安装附带的可选 bundle 和按需安装的目录项（4.5 节），但会跳过 `HIDDEN_BUNDLES`（内置形态 + 持久终端 + 独立工作树工具）。主列表优先排 `EXTENSION_BUNDLES`（语音、插件市场、自动审查），`MORE_BUNDLES` 里的项要等 profile 启用后才上主列表；Forge / LiveShare 等实验包带 Experimental 标记。插件客户端拿到的 `BundleInfo` 带必填的 `official` 与 `availability`：前者表示"由项目维护"，后者是 `installation`、`profile` 或 `missing`；`installed` 仍然只表示"profile 声明了这个依赖"。已装的按需 bundle 可以通过 **Update** 更新到与当前 DSH 匹配的版本，需要重启时会明确报告。
 
 ## 4.12 Harness Home：`~/.dsh`——用户层与部署层的分界
 
@@ -447,10 +452,11 @@ $LASTEXITCODE
 - **Web 表单保存后，bundle 默认值不再更新**：因为整个条目的 config 被存进了 profile 层；想重新跟随默认值，就重置整个条目；
 - **home 补丁高于 profile 补丁**：在 `~/.dsh/cordis.patch.yml` 里写过的行，会让 Web 表单对同一行的编辑被拒绝；
 - **"启用"一个不存在的行不会插入插件**：`- id: xxx` + `disabled: false` 只能改已有的行；能力被搬进可选 bundle 或实验包后，要么在插件页打开对应 bundle，要么装好包再写完整的 `insert`；
-- **持久终端不在插件页上**：改 `$DSH_HOME/profiles/<名>/package.json` 的 `dsh.profile.bundles`，不要找 UI 开关；
+- **持久终端与独立工作树工具不在插件页上**：改 `$DSH_HOME/profiles/<名>/package.json` 的 `dsh.profile.bundles`，不要找 UI 开关；Web/Desktop 上优先用 Forge 统一入口，不要与隐藏的 `tool-worktree` 叠选；
 - **插件声明了 `engines.dsh` 就要让它覆盖全部支持的宿主版本**：有它时 peer 范围不再参与判定；不匹配需 `allow-version ... --accept-risk` 精确豁免；
 - **`dsh plugin` 的 `--profile` 要写在最前**：`dsh plugin --profile <名字> add <包>`，写在 pnpm 命令之后会被原样转给 pnpm；
-- **手动组合实验包要连 peer 一起装**：profile 关闭了自动安装 peer，缺 peer 的插件会激活失败。
+- **手动组合实验包要连 peer 一起装**：profile 关闭了自动安装 peer，缺 peer 的插件会激活失败；
+- **运行时对 bundle 插入行的 `disabled` 自改不持久**：重启后仍以 profile 的 `dsh.profile.bundles` 与用户补丁为准（第 3 章 Include journal）。
 
 ## 4.15 思考题
 
@@ -460,15 +466,15 @@ $LASTEXITCODE
 4. DSH 现在有两类官方 bundle：随安装附带的 `OPTIONAL_BUNDLES`（离线可用，但每个用户都要下载它的依赖）和按需安装的 `ON_DEMAND_BUNDLES`（只下载给需要的人，但打开时要联网、要钉住版本）。如果让你决定一个新能力进哪一类，你会看哪些指标？为什么按需安装坚持复用第三方 bundle 的安装器，而不是另做一套？
 5. profile 的模块解析从"磁盘链接"改成了"进程内不可变的解析代"，0.2.1 又让包操作之后能发布新的一代。为什么"新装的包可以热生效，但覆盖已有包的版本只能重启"是一个诚实的限制，而不是偷懒？
 6. 升级指南明确"安装与组合是两件事"，并且"只写 `disabled: false` 的补丁不会插入一个已被移除的行"。如果反过来，让"按 id 启用一个不存在的行"自动去找、去装对应的包，会带来哪些好处和风险？
-7. 持久终端仍在 `OPTIONAL_BUNDLES` 里，却进了 `HIDDEN_BUNDLES`，只能改 profile 的 `dsh.profile.bundles`。把"可选"和"在插件页可见"拆开，解决的是什么产品问题？插件市场默认无索引，又在防什么？
+7. 持久终端与独立工作树工具仍在 `OPTIONAL_BUNDLES` 里，却进了 `HIDDEN_BUNDLES`，只能改 profile 的 `dsh.profile.bundles`；Forge 则把评审面板与工作树收成插件页上的一个开关。把"可选"和"在插件页可见"拆开，解决的是什么产品问题？插件市场默认无索引，又在防什么？
 
 ## 小结
 
 - Profile = 配方（有序 bundle 列表 + 自己的补丁层）；Bundle = 带补丁文件的 npm 包；应用顺序固定：bundle → profile 补丁 → home 补丁 → `--patch`；
-- 覆盖规则只有两条：按 id 整字段替换，或 insert；id 不存在只警告，空文件才失败；
-- 内置五个模板与官方列表均来自 `@deepseek-ai/dsh-official-bundles`；热加载与否由合成出的 `hmr` 行决定；`dsh <名字>` 是 `--profile` 的简写；`RETIRED_BUNDLES` 会在加载时清掉已退役的 bundle 名；
+- 覆盖规则只有两条：按 id 整字段替换，或 insert；id 不存在只警告，空文件才失败；`applyEntryPatches` 始终克隆；patch 拥有的运行时变更经 Include journal 写父级 patch；
+- 内置五个模板与官方列表均来自 `@deepseek-ai/dsh-official-bundles`；热加载与否由合成出的 `hmr` 行决定；`dsh <名字>` 是 `--profile` 的简写；`RETIRED_BUNDLES` 会在加载时清掉已退役的 bundle 名（含 schedule 与 agent-team-profile）；
 - 兼容性优先读 `engines.dsh`，否则读 DSH peer；不匹配可精确豁免（`allow-version`）；
-- 官方 bundle：14 个随安装附带、默认关闭的可选项（含 CUA、推荐、插件市场；持久终端隐藏于插件页），以及 Claude Code / Codex 两个按需安装的原生集成；hooks、webhooks 等实验包"安装 ≠ 挂载"，要先装（连同 peer）再写完整的 `insert`；
+- 官方 bundle：15 个随安装附带、默认关闭的可选项（含 CUA、推荐、插件市场、LiveShare、Forge；持久终端与独立 `tool-worktree` 隐藏于插件页），以及 Claude Code / Codex 两个按需安装的原生集成（`ON_DEMAND_BUNDLES`）；hooks、webhooks 等实验包"安装 ≠ 挂载"，要先装（连同 peer）再写完整的 `insert`；
 - `dsh plugin` 的 `--profile` 必须写在转发给 pnpm 的参数之前；
 - `settings.yaml` 已移除：表单直接写 profile 补丁层，volatile 字段原地更新；Agent 预设也只是普通配置行；
 - profile 通过进程内不可变的运行时解析表找到 DSH 自身的包，不再写磁盘链接；包操作之后会发布新的一代，覆盖已有包仍需重启；

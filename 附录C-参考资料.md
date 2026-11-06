@@ -1,8 +1,8 @@
 # 附录 C 参考资料
 
-本附录列出的路径都相对于 DSH 仓库根目录，已按 HEAD（`0.2.1-rc.3`，commit `22ddee3792`）用 `git ls-files` / 目录列举核实存在。官方文档大多有中文版：把 `xxx.md` 换成 `xxx.zh.md` 即可；每对译文旁还有一个 `xxx.i18n.yaml`，记录两种语言按章节对齐的配对指纹，由 `verify-translation-pairing` 检查（`docs/` 下除 `docs/AGENTS.md`、`docs/i18n/` 的几份翻译工作文件和 `docs/cordis-api/inherited.md` 外都成对存在；设计笔记和升级指南也有 `.zh.md`）。
+本附录列出的路径都相对于 DSH 仓库根目录，已按 HEAD（`0.2.2-rc.1`，commit `fcc0ad4621`）用 `git ls-files` / 目录列举核实存在。官方文档大多有中文版：把 `xxx.md` 换成 `xxx.zh.md` 即可；每对译文旁还有一个 `xxx.i18n.yaml`，记录两种语言按章节对齐的配对指纹，由 `verify-translation-pairing` 检查（`docs/` 下除 `docs/AGENTS.md`、`docs/i18n/` 的几份翻译工作文件和 `docs/cordis-api/inherited.md` 外都成对存在；设计笔记和升级指南也有 `.zh.md`）。
 
-> 相对书稿上一基准（0.2.1-alpha.2）的路径变化：组合包列表迁到 `packages/util/official-bundles/`；新增工具执行器 `packages/core/tool-executor-native` / `tool-executor-ptc`、插件市场与 CUA 等实验包；升级指南新增 `v0.2.1-alpha.3` … `v0.2.1-rc.3` 整批。更早相对 0.1.7-rc.2：`docs/subsystems/invariants.md` 已删除；`apps/cli/config/examples/github-review/` 已删除，示例随 `webhook-github` 适配器发布。
+> 相对书稿上一基准（0.2.1-rc.3）的路径变化：升级指南新增完整的 `v0.2.1-rc.3`（13 主题）、`v0.2.1-rc.4`、`v0.2.2-alpha.2`（含搜索默认 / Forge / Schedule Host API 等）、`v0.2.2-alpha.3`；新增 `packages/team/`、`packages/experimental/forge*` / `liveshare*`、`packages/web/web-deepseek-api`；可选 bundle 扩至 **15** 项；Exa / Perplexity 搜索包已从仓库移除。更早相对 0.2.1-alpha.2：组合包列表在 `packages/util/official-bundles/`，工具执行器与插件市场 / CUA 等仍适用。
 
 ## 仓库入口
 
@@ -26,7 +26,11 @@
 - `v0.2.1-alpha.4/`：`account-notification-fields`、`model-switch-compaction`、`session-model-selection`
 - `v0.2.1-rc.1/`：`agent-instructions-chain-budgets`、`subagent-control-tools`
 - `v0.2.1-rc.2/`（大批量）：`node-24`、`official-bundle-lists`、`tool-executor-plugins`、`conditional-tools`、`session-projection-handles`、`session-store-writes`、`persistent-terminal-controls`、`pi-ai-model-catalog` / `pi-ai-default-capacities` / `pi-ai-protocol-replay`、`web-fetch-private-destinations`、`webserver-index-peer`、`headless-policy-composition`、`new-session-blank-reuse`、`sdk-desktop-context`、`sdk-minimal-checkpoints`、`approval-projection-dependency`、`auto-review-shutdown` / `auto-review-user-sources`、`cua-preset-scope` / `cua-relative-coordinates`、`built-in-japanese`、`file-drag-callbacks`
-- `v0.2.1-rc.3/`：`independent-session-forks`（普通 fork 成为独立 Session，不再写 `parentSession`）
+- `v0.2.1-rc.3/`：`independent-session-forks`、`web-search-defaults`、`team-mode-menu`、`team-projection`、`generated-worktree-names`、`session-follow-activation`、`web-file-downloads`、`inbox-only-agent-wait`、`cua-bundle-id-consent`、`computer-use-helper-permissions`、`attachment-read-access`、`ptc-caller-cancellation`、`subagent-runtime-ownership`
+- `v0.2.1-rc.4/`：`model-listing-refresh`、`reasoning-body-props`
+- `v0.2.2-alpha.2/`（大批量）：`web-search-default-provider`（默认 DeepSeek Search API；**Exa / Perplexity 已移除**）、`web-search-credential-modes`、`schedule-agent-tools`、`schedule-remote-host-tasks`、`forge-worktree-entry`、`forge-git-permissions`、`fs-observation-policy-default-off`、`llm-request-purpose-declarations`、`projection-event-frames` / `projection-snapshot-scope` / `projection-released-checkpoint`、`sdk-run-commands`、`subagent-explicit-reasoning`、`cordis-loader-entry-trees`、`css-anchored-menus`、`context-menu-target`、`session-header-menu`、`desktop-stable-channel`、`cua-source-dev-helper`、`pi-ai-request-image-count`、`retained-ptc-timeout`
+- `v0.2.2-alpha.3/`：`chat-process-activity-context`、`subagent-names`（子代理工具按 **name** 寻址）
+- `v0.2.2-rc.1/`：升级指南目录暂无独立主题文件夹（以源码 / changelog 为准）
 
 ## 架构与核心文档（docs/）
 
@@ -83,15 +87,20 @@
 - 进阶能力（第 13 章）：`subagent.md`、`skills.md`、`workflow.md`、`plan.md`、`goal.md`、`schedule.md`、`deliverables.md`、`office-to-pdf.md`、`browser-use.md`、`computer-use.md`、`agent-team.md`、`voice-input.md`、`webhook.md`、`claude-code-mods.md`、`translation.md`、`workspace.md`、`scope.md`、`attachment.md`、`feedback.md`
 - 可观测（第 13、14 章）：`otel.md`（`ctx.otel` 通道工厂）、`product-telemetry.md`、`session-telemetry.md`
 
-> 0.2.x 的增减：新增 `otel.md`、`translation.md`、`working-directory.md`、`worktrees.md`、`claude-code-mods.md`；删除 `invariants.md`。旧版书稿"更多"清单里的 `telemetry` 早已拆成 `session-telemetry.md` 与 `product-telemetry.md`。CUA / 插件市场 / tool-executor 等较新能力以包内 `README.zh.md` 与对应升级指南为主，subsystem 索引未全部单列时以包 README 为准。
+> 0.2.x 的增减：新增 `otel.md`、`translation.md`、`working-directory.md`、`worktrees.md`、`claude-code-mods.md`；删除 `invariants.md`。旧版书稿"更多"清单里的 `telemetry` 早已拆成 `session-telemetry.md` 与 `product-telemetry.md`。CUA / 插件市场 / tool-executor / Forge / Live Share / DeepSeek Search API 等较新能力以包内 `README.zh.md` 与对应升级指南为主，subsystem 索引未全部单列时以包 README 为准。
 
-## 关键包 README（与 0.2.1-rc 新能力）
+## 关键包 README（与 0.2.2-rc 新能力）
 
-- 官方组合包列表：`packages/util/official-bundles/README.md`（中文 `README.zh.md`）
+- 官方组合包列表：`packages/util/official-bundles/README.md`（中文 `README.zh.md`）；`OPTIONAL_BUNDLES` 现 **15** 项（含 `forge-bundle` 与 `liveshare`）
 - 工具执行器：`packages/core/tool-executor-native/README.md`、`packages/core/tool-executor-ptc/README.md`
 - 插件市场：`packages/boot/plugin-market/README.md`、`packages/client/ui-plugin-market/README.md`、`packages/experimental/plugin-market-bundle/`；索引生成 app：`apps/plugin-market-generator/`
 - CUA：`packages/experimental/cua/README.zh.md`、`cua-macos/README.zh.md`、`cua-bundle/`
+- Team：`packages/team/agent-team/`、`packages/team/tool-agent-team/`（随 `dsh-base` 挂载；可选 `agent-team-profile` 已退役）
+- Forge：`packages/experimental/forge/`、`forge-session/`、`forge-github/`、`forge-bundle/`、`client-ui-forge/`
+- Live Share：`packages/experimental/liveshare/`、`liveshare-protocol/`
+- DeepSeek Search / Fetch API：`packages/web/web-deepseek-api/`（默认 `searchProvider: deepseek-search-api`）；旧 Messages 搜索仍见 `packages/web/web-search-deepseek/`；**Exa / Perplexity 包已从仓库移除**
 - HTTP 抓取：与 `web_fetch` 私有目标相关的升级指南见上节 `web-fetch-private-destinations`；实现包 `@deepseek-ai/dsh-web-fetch-http`
+- Schedule：`packages/schedule/schedule/README.zh.md`（宿主范围任务管理与存储 schema）；工具升级见 `schedule-agent-tools`
 
 ## 示例与可运行素材
 
@@ -101,7 +110,7 @@
 - `apps/cli/config/examples/mcp-memory/`：三种 MCP 记忆服务器的组合示例（配合 `docs/user/guide/mcp-memory.md`）
 - `python/sdk/examples/minimal.py`（说明见 `python/sdk/examples/README.md`）：Python SDK 最小程序
 - `packages/bundle/*/cordis.patch.yml`、`packages/bundle/web-app/presets/*.patch.yml`：内置组合包与 Web preset 的真实装配
-- `packages/experimental/*/cordis.patch.yml`：随附可选 bundle 的装配（HEAD 的 `OPTIONAL_BUNDLES` 共 14 项，含 `cua-bundle`、`plugin-market-bundle`、`personalized-recommendations` 等；例如 `packages/experimental/session-search/cordis.patch.yml` 用隔离分组挂载自己的内存索引）
+- `packages/experimental/*/cordis.patch.yml`：随附可选 bundle 的装配（HEAD 的 `OPTIONAL_BUNDLES` 共 **15** 项，含 `cua-bundle`、`plugin-market-bundle`、`personalized-recommendations`、`forge-bundle`、`liveshare` 等；例如 `packages/experimental/session-search/cordis.patch.yml` 用隔离分组挂载自己的内存索引）
 - `packages/bundle/*/cordis.patch.yml` 中与 tool-executor 相关的挂载行：对照升级指南 `tool-executor-plugins` 理解原生 / PTC 执行器如何进入 base
 - `snapshots/`：keyless 快照场景（`snapshots/session`、`sdk`、`acp`、`web`，说明见 `snapshots/AGENTS.md`）
 - `benchmarks/`：仓库级性能门（说明见 `benchmarks/AGENTS.md` 与各场景 `README.md`，附录 F；CI 要求 Node >= 24.9）

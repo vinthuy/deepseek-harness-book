@@ -33,11 +33,12 @@
 
 "原样"并不等于"一字不改"：`vendor/README.md` 里有一份要求**穷举**的 *Local modifications* 清单，记录每一处与上游的差异（例如 `applyEntryPatches` 的导出、Fiber 的可重入销毁加固、可恢复的文件刷新、volatile 配置等），以及从上游同步时如何重新套用这些修改。vendor 的价值恰恰在这里：**可以改，但每一处改动都有账可查**。
 
-从上一版基准 0.2.1-alpha.2 到本版 `0.2.1-rc.3`（commit `22ddee3792`），vendor 层的变化仍然很小，正好可以拿来看这本账怎么记：
+从上一版基准 `0.2.1-rc.3`（commit `22ddee3792`）到本版 `0.2.2-rc.1`（commit `fcc0ad4621`），vendor 层迎来一次有实质语义的升级——正好可以拿来看这本账怎么记：
 
-- 9 个包从 alpha 预发布落到了稳定补丁号（例如 `@deepseek-ai/cordis` 为 `4.0.5`，`cordis-plugin-loader` 为 `1.0.6`；其余配套包也去掉了 `-alpha.*` 后缀）；
+- 9 个包的 **Harness 发布号**升到了新的稳定线（`package.json` 所见）：`@deepseek-ai/cordis` 为 `4.1.0`，`cordis-plugin-loader` / `cordis-plugin-include` 等为 `1.1.0`（timer 为 `1.2.0`，schemastery `3.19.0`，cosmokit `1.9.0`）。上游跟踪点写在 `vendor/README.md` 的 Manifest 表里：Core 跟到 `4.0.0-rc.11`，Loader 跟到 `1.0.0-rc.8`，Include 跟到 `1.1.1`——升级指南 `v0.2.2-alpha.2/cordis-loader-entry-trees` 讲的正是这次 API 换代；
 - 清单第 23 条仍在：`vendor/loader/src/config/entry.ts` 里的每个条目（Entry）保留 `moduleNamespace`——"导出规范化之前"的原始导入结果。DSH 的 HMR 用它去和 Node 缓存的模块命名空间做匹配，热重载成功后才更新它；`loader/README.md` 也记录了这个字段。它服务于"插件包刷新"（第 4 章 4.8 节）：一个包的 `package.json` 变了，HMR 要能准确找到"哪些条目加载的是这个模块"；
-- 清单新增了第 24 条：`timer/locale/{en,zh}.json`，给 Settings 插件清单提供本地化标题与描述。
+- 第 24 条仍在：`timer/locale/{en,zh}.json`，给 Settings 插件清单提供本地化标题与描述；
+- 本轮清单继续往后记：V25（Loader 在合并 context/config 更新前刷新依赖、禁用条目等待销毁）、**V26**（跨树移动时把条目及其同树 group 成员的 store 注册迁到目标树，避免 Include journal 写出残缺行）、**V27**（`ensureId()` 接受含 `:` 的显式 id——生成型 bundle 会用 `<包名>:` 前缀；`resolve()` 仍按 `:` 切路径，这类 id 不能按嵌套路径寻址）。
 
 注意 `moduleNamespace` 的写法：**只加字段、不改 `EntryTree.import()` 的参数和返回值**。对 vendor 代码做"增量、可描述、可重放"的修改，才能让下一次从上游同步时不至于变成一场考古。运行时侧另有一条与 Cordis 无关、但和"插件能不能进树"相关的规则：从 `0.2.1-alpha.3` 起，安装与 profile 启动优先读插件 `package.json` 的 **`engines.dsh`**（没有才回退到 DSH peer），不匹配的行会被禁用——细节在第 4 章。
 
@@ -272,6 +273,17 @@ export function apply(ctx: Context, config: Config) {
 
 还有一个容易踩的坑（教程第 1 章专门提醒）：模块**解析失败**（包名或路径拼错）会通过 Cordis 日志服务报告，而不是让进程崩溃；启动早期如果控制台导出器还没挂上，这条报告可能看不到。新加的条目"什么都没发生"时，先检查拼写。
 
+### Loader 条目树：`commit(change)` 与 Include 的 journal 持久化
+
+`0.2.2-alpha.2` 把"条目树怎么报告变更、文件怎么落盘"换成了上游 Loader rc.8 / Include 1.1.1 的契约（升级指南 `v0.2.2-alpha.2/cordis-loader-entry-trees`）：
+
+- **`EntryTree.write()` 已移除。** 子类实现 `commit(change: EntryChange)`：每一次创建、更新、移动、删除和显式 Fiber 保存，都会同步报到树这一侧。内存树（包括预设树）的实现是空操作；真正写文件的是 Include。
+- **`applyEntryPatches(data, patches, warn)` 总是返回克隆后的条目**——没有补丁时也一样，插入行同样会被克隆。调用方不能再通过返回值去改输入列表；DSH 的 `--dump-config` 与真正挂载共用同一算法（本地修改 V11 仍导出 `applyEntryPatches` / `entryListSchema`）。
+- **Include 用 journal 持久化运行时变更**：先记变更，再与最新文件协调后写入；同一字段冲突时**文件编辑优先**，并记一条冲突诊断。对 patch 所拥有字段和插入行的修改，写的是**父 Include 的 patch**，不是被 include 的那个文件。`flush()` 等待待处理写入，若仍有未保存变更则拒绝；`refresh()` / `stop()` 返回相同的完成结果。需要落盘时 `await include.flush()`；patch 拥有的变更要先 flush 子 Include，再 flush 其父。
+- **生成的 id 会写回原本没有 id 的文件行。** 对 patch 插入行（包括 bundle 行）的运行时修改走父级 patch。`dsh` profile 根 Include 的父级是**内存中的 Loader**，因此这类修改——例如某条 bundle 行自行释放时写入的 `disabled: true`——**重启后不再保留**；此前整棵"已应用 patch 的树"会被写进 `cordis.yml`。这是一次可观察的行为收紧：瞬时运行态不再冒充用户补丁。
+
+对普通用户，日常编辑 profile / home 的 `cordis.patch.yml` 或用 Web 表单保存，路径没变；变的是框架侧"谁拥有这一行、写到哪一层、什么算持久"。第 4 章会看到这和"表单写回补丁层"是同一条责任链。
+
 ## 3.7 事件的五种模式：通信的五种语义
 
 | 模式 | 调用方式 | 是否等待 | 返回值 | DSH 中的例子 |
@@ -344,14 +356,15 @@ corepack pnpm dsh web --patch .\my-patch.yml
 4. Loader 从"事务式重载"退回"非事务式"。站在一个正在编辑 profile 补丁的用户的角度，这两种语义各自给他什么体验？你认为"自动回滚"值得那么多额外的生命周期代码吗？
 5. 运行时不变量服务（`ctx.invariants`）被整体移除后，四个凭据/授权/模型适配器相关的 emit 改为"捕获并记录监听器失败"。为什么一个"观察型"事件不应该让监听器的异常传回生产者？如果你确实需要"某个检查失败就让操作失败"，应该用哪种分发模式来表达？
 6. 插件包的 `engines.dsh` 由 app-boot 在 Loader 之前检查，Cordis 并不认识这个字段。把"宿主兼容性"放在应用层而不是框架层，换来了什么、又失去了什么？
+7. Loader 用 `commit(change)` 报告变更，Include 用 journal 落盘，而 profile 根 Include 的父级是内存 Loader。为什么"bundle 行运行时把自己 `disabled: true`"在重启后会消失？如果把父级也改成文件 Include，又会引入什么新问题？
 
 ## 小结
 
-- DSH 不自己写插件框架，而是以源码形式 vendor 了 Cordis 及其 8 个配套包，所有本地修改都在 `vendor/README.md` 里记账（第 23 条是 Loader 条目的 `moduleNamespace`，第 24 条是 timer 的 locale 元数据）；到 `0.2.1-rc.3` 时 vendor 包号已从 alpha 落到稳定补丁；
+- DSH 不自己写插件框架，而是以源码形式 vendor 了 Cordis 及其 8 个配套包，所有本地修改都在 `vendor/README.md` 里记账（V23 `moduleNamespace`、V24 timer locale、V25–V27 生命周期 / 跨树移动 / 含 `:` 的显式 id）；到 `0.2.2-rc.1` 时 Harness 发布号为 cordis `4.1.0`、loader/include `1.1.0` 一线，上游跟到 Loader rc.8 / Include 1.1.1；
 - 五个概念：插件（三种形态）、Context、inject、类型化事件（五种分发模式）、可逆副作用；每个插件实例由一个 Fiber 承载，PENDING 是合法状态；
 - 能力即服务：DSH 的产品功能是一张服务表；不再需要的能力（如 0.2.1 移除的运行时不变量服务）删掉插件行即可退场；
 - 可逆副作用是插件化的灵魂：销毁逆序启动、异步销毁并发执行，顺序敏感的清理放进同一个 effect；
 - 配置即开关：条目 + schema 校验；volatile 字段可以不重启就更新；`!!js` 只在 `config` 与 `disabled` 中求值；进入 Loader 之前，应用层还会按 `engines.dsh`（或 DSH peer）预检兼容性；
-- Loader 是非事务式的：失败不回滚，由应用层审计激活结果并大声报错。
+- Loader 是非事务式的：失败不回滚，由应用层审计激活结果并大声报错；条目树通过 `commit(change)` 报告变更，Include 用 journal 持久化，`applyEntryPatches` 始终返回克隆，patch 拥有的运行时修改写父级 patch。
 
 下一章看配置的完整形态：Profile、Bundle、补丁——这几层如何叠出一台具体的 DSH，以及它们现在如何被 Web 界面直接编辑。

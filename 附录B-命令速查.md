@@ -1,6 +1,6 @@
 # 附录 B 命令速查
 
-所有命令默认在 `deepseek-harness` 仓库根目录执行，基准为 **`0.2.1-rc.3`**（源码 commit `22ddee3792`）；要求 **Node.js `>=24.9.0`**（旧口径 `^22.19.0 || >=24.0.0` 已废弃）。本机没有全局 pnpm 时统一用 `corepack pnpm`（`packageManager: pnpm@11.28.5`）。根 `package.json` 里的脚本是唯一真源——本附录只收常用的那部分，完整清单请直接看 `package.json` 的 `scripts` 与 `scripts/run-gates.ts`；`dsh` 各命令的完整帮助生成在 `docs/cli-help.md`（与 HEAD 对齐，用 `corepack pnpm run verify-cli-help` 检查）。
+所有命令默认在 `deepseek-harness` 仓库根目录执行，基准为 **`0.2.2-rc.1`**（源码 commit `fcc0ad4621`）；要求 **Node.js `>=24.9.0`**（旧口径 `^22.19.0 || >=24.0.0` 已废弃）。本机没有全局 pnpm 时统一用 `corepack pnpm`（`packageManager: pnpm@11.28.5`）。根 `package.json` 里的脚本是唯一真源——本附录只收常用的那部分，完整清单请直接看 `package.json` 的 `scripts` 与 `scripts/run-gates.ts`；`dsh` 各命令的完整帮助生成在 `docs/cli-help.md`（与 HEAD 对齐，用 `corepack pnpm run verify-cli-help` 检查）。
 
 > Windows 注意：少数脚本采用 POSIX 写法 `VAR=value 命令`（如 `test:snapshot:record`、`test:snapshot:refresh`、`test:expected:refresh`、`test:web:refresh`、`test:web:perf:built`），在 Windows 的 cmd 下无法直接运行。可以先在 PowerShell 里设置环境变量，再直接调用 vitest，例如：
 >
@@ -26,28 +26,31 @@ corepack pnpm run build              # 完整构建：build:native-system → bu
 根脚本 `dsh` = `node --import tsx/esm apps/cli/src/bin.ts`，它使用已有构建产物，不会自动构建。
 
 ```powershell
-corepack pnpm dsh web                                   # 启动 Web UI（127.0.0.1:3080，本机自动开浏览器）
+corepack pnpm dsh web                                   # 启动 Web UI（合成后的 host/port，默认常为 127.0.0.1:3080；本机自动开浏览器）
 corepack pnpm dsh web --no-open                         # 只起服务，不开浏览器
 corepack pnpm dsh web --port 3081                       # 换端口（0 = 由系统挑选）
-corepack pnpm dsh web --host 10.0.0.7                   # 绑定一个具体的本机地址（通配地址被拒绝）
-corepack pnpm dsh web --public-url https://app.example/ui/ --trusted-host app.example   # 反向代理之后：公告地址 + 信任 authority
-corepack pnpm dsh web --tls-cert .\server-chain.pem --tls-key .\server-key.pem         # 监听器直接提供 HTTPS
-corepack pnpm dsh web --help                            # web 应用自己的帮助
+corepack pnpm dsh web --host 10.0.0.7                   # 绑定一个具体的本机 IPv4/IPv6 字面量（通配地址被拒绝）
+corepack pnpm dsh web --public-url https://app.example/ui/ --trusted-host app.example   # 反向代理之后：公告地址（不授予信任）+ 信任 authority
+corepack pnpm dsh web --tls-cert .\server-chain.pem --tls-key .\server-key.pem         # 监听器直接提供 HTTPS（须成对）
+corepack pnpm dsh web --help                            # web 应用自己的帮助（= dsh --profile web --help）
 corepack pnpm dsh --help                                # 启动器自己的帮助
-corepack pnpm dsh --version                             # 版本号
+corepack pnpm dsh --version                             # 版本号（-V 同义）
 corepack pnpm dsh headless "任务描述"                    # 一次性任务：答案到 stdout，诊断到 stderr
-corepack pnpm dsh headless --json "任务描述"             # stdout 改为按行 JSON 事件流
-corepack pnpm dsh headless --session-id <id> "继续"      # 在已持久化的会话上继续
+corepack pnpm dsh headless --json "任务描述"             # stdout 改为按行 JSON 运行事件流
+corepack pnpm dsh headless -                            # 任务从 stdin 读入（参数为 -；见 cli-help）
+corepack pnpm dsh headless --session-id <id> "继续"      # 在已持久化的会话上继续（未知 id 报错）
 corepack pnpm dsh headless --permission-mode workspace-write --add-dir D:\repo\.git "提交修复"
 corepack pnpm dsh headless --permission-mode workspace-write --approval-policy never "无人值守任务"
 corepack pnpm dsh --profile sdk                         # stdio 上的 SDK JSON-RPC 服务
+corepack pnpm dsh --profile sdk-minimal                 # 最小 SDK 装配（无应用参数）
 corepack pnpm dsh --profile acp                         # stdio 上的 ACP 服务
-corepack pnpm dsh web --patch .\my-patch.yml            # 带额外补丁层启动（可重复）
+corepack pnpm dsh web --patch .\my-patch.yml            # 带额外补丁层启动（可重复；在 profile 层之后）
 corepack pnpm dsh rescue --from-default-profile web     # 用 web 模板创建或覆盖自定义 profile 并启动
+corepack pnpm dsh tui --patch .\extra.yml               # 自定义 profile + 一层 overlay（cli-help 示例）
 npx @deepseek-ai/dsh web                                # 快速体验（不克隆源码）
 ```
 
-`web` 的全部应用参数（与 `docs/cli-help.md` 一致）：`--host`、`--port`、`--public-url`、可重复的 `--trusted-host`、`--tls-cert`/`--tls-key`（必须成对）、`--no-open`。`headless` 的应用参数：任务文本（省略或 `-` 时读 stdin）、`--json`、`--session-id`、`--permission-mode <preset>`、`--approval-policy ask|never`、可重复的 `--add-dir <绝对路径>`。`sdk`、`sdk-minimal`、`acp` 没有应用参数。
+`web` 的全部应用参数（与 `docs/cli-help.md` 一致）：`--host`、`--port`、`--public-url`、可重复的 `--trusted-host <authority...>`（host 或 host:port）、`--tls-cert`/`--tls-key`（必须成对）、`--no-open`。`headless` 的应用参数：任务文本（多词以空格拼接；省略或 `-` 时读 stdin）、`--json`、`--session-id`、`--permission-mode <preset>`（含 resume）、`--approval-policy ask|never`、可重复的 `--add-dir <物理绝对路径>`（在 `workspace-write` 下额外放行）。`sdk`、`sdk-minimal`、`acp` 没有应用参数。启动器公共选项：`--profile`、`--from-default-profile`、可重复的 `--patch`、三种互斥 dump（见下）。
 
 随附 profile 模板：`web`、`headless`、`sdk`、`sdk-minimal`、`acp`（首次使用自动初始化）。`desktop` 是桌面应用保留名，npm/源码版 CLI 拒绝操作它；只有桌面端自带的 `dsh` 命令能管理已初始化的 desktop profile 的插件。
 
@@ -71,17 +74,18 @@ corepack pnpm dsh plugin --profile web add <package-or-git-spec>
 corepack pnpm dsh plugin --profile web remove <package>
 corepack pnpm dsh plugin --profile web why <package>
 corepack pnpm dsh plugin --profile web add @deepseek-ai/dsh-subagent-codex      # 按需官方子 Agent（ON_DEMAND）
+corepack pnpm dsh plugin --profile web add @deepseek-ai/dsh-subagent-claude-code
 corepack pnpm dsh plugin --profile web add @deepseek-ai/dsh-hooks-claude-code @deepseek-ai/dsh-hook-protocol   # 实验性 hook 桥接（peer 需一并安装）
 corepack pnpm dsh plugin --profile web add @deepseek-ai/dsh-webhook @deepseek-ai/dsh-webhook-github            # 实验性 GitHub webhook 适配器
-corepack pnpm dsh plugin --profile tui add github:deepseek-harness/turtle-ui    # 外部终端界面插件示例
+corepack pnpm dsh plugin --profile tui add github:deepseek-harness/turtle-ui    # 外部终端界面插件示例（cli-help）
 # engines.dsh / DSH peer 不匹配时的精确版本豁免（须 --accept-risk；只认精确 package@version × 精确 DSH 版本）
-corepack pnpm dsh plugin --profile web allow-version <pkg@1.2.3> --dsh-version 0.2.1-rc.3 --accept-risk
-corepack pnpm dsh plugin --profile web revoke-version <pkg@1.2.3> --dsh-version 0.2.1-rc.3
+corepack pnpm dsh plugin --profile web allow-version <pkg@1.2.3> --dsh-version 0.2.2-rc.1 --accept-risk
+corepack pnpm dsh plugin --profile web revoke-version <pkg@1.2.3> --dsh-version 0.2.2-rc.1
 corepack pnpm dsh plugin --profile web version-exemptions                      # 打印 compatibility.json 中的豁免
 dsh plugin --profile desktop add <package>                                        # 仅限桌面端注册的 dsh 命令，且需先退出桌面端
 ```
 
-profile 关闭了自动安装 peer，所以实验性包的 peer 依赖要写在同一条命令里；安装一个包并不会自动把它挂进配置树，参见升级指南 `experimental-package-composition`。兼容性优先读插件的 `engines.dsh`（见 `plugin-engines-dsh`）。持久终端组合包不在插件页显示，需改 profile 的 `dsh.profile.bundles`（见 `persistent-terminal-controls`）。
+profile 关闭了自动安装 peer，所以实验性包的 peer 依赖要写在同一条命令里；安装一个包并不会自动把它挂进配置树，参见升级指南 `experimental-package-composition`。兼容性优先读插件的 `engines.dsh`（见 `plugin-engines-dsh`）。持久终端与独立 `tool-worktree` 组合包不在插件页显示，需改 profile 的 `dsh.profile.bundles`（见 `persistent-terminal-controls`、`forge-worktree-entry`）；Web/Desktop 上 Forge / LiveShare 等可选能力在插件页开关，清单见第 4 章 `OPTIONAL_BUNDLES`（15 项）与 `ON_DEMAND_BUNDLES`。
 
 ## 验证与排查
 
@@ -119,7 +123,7 @@ corepack pnpm run change-scope          # 报告当前改动的已提交/工作�
 
 需要重新录制快照时（Windows 写法见本附录开头）：`test:snapshot:record`（模型 transcript 变化时）、`test:snapshot:refresh`（回放输入仍有效时）。
 
-> 已移除：`verify-package-invariants`、`verify-built-package-invariants`（随运行时不变式一起删除）与 `gen-scoped-events`/`verify-scoped-events` 在现行 `0.2.1-rc.3` 的 `package.json` 中仍不存在。
+> 已移除：`verify-package-invariants`、`verify-built-package-invariants`（随运行时不变式一起删除）与 `gen-scoped-events`/`verify-scoped-events` 在现行 `0.2.2-rc.1` 的 `package.json` 中仍不存在。相对 `0.2.1-rc.3`，根脚本新增 `purge:latest`（见下「桌面应用」）。
 
 ## 开发
 
@@ -152,6 +156,7 @@ corepack pnpm run package:desktop:mac:x64            # macOS x64
 corepack pnpm run package:desktop:mac:arm64:unsigned # macOS arm64 本地构建（不签名、不公证）
 corepack pnpm run package:desktop:mac:x64:unsigned   # macOS x64 本地构建（不签名、不公证）
 corepack pnpm run prepare:primary-runtime            # 准备桌面端自带的第一方运行时（Python/Node/pnpm）
+corepack pnpm run purge:latest                       # 转发 desktop 包的 purge:latest（清理 latest 渠道相关状态；贡献者/诊断用）
 ```
 
 根目录 `Makefile` 用 `make web`、`make dev-web`、`make desktop`、`make dev-desktop`、`make build`、`make clean` 命名同一套命令（`make help` 列出全部 target，`ARGS='--no-open'` 转发参数）；Windows 上需要自行安装 make。
